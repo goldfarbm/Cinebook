@@ -58,7 +58,7 @@ class MatchTests(unittest.TestCase):
         selected = lookup({'kind': 'tv', 'title': 'Shared name', 'author': '', 'isbn': '', 'match_choice': 'tvmaze:2'})
         self.assertEqual(selected['match']['first_publish_year'], '2020')
 
-    def test_choice_waits_for_user_and_survives_restart_retry_and_notes(self):
+    def test_choice_survives_restart_and_notes_but_retry_reopens_selection(self):
         row = self.make_ambiguous()
         self.assertEqual(row['status'], 'ambiguous')
         self.assertEqual(row['author'], '')
@@ -81,12 +81,45 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(reopened.test_client().get('/books/1').status_code, 200)
         self.post('/books/1/edit', title='Shared name', author='Bob Writer', notes='My notes')
         self.assertEqual(self.row()['match_choice'], '/works/OL2W')
-        self.post('/books/1/retry')
+        page = self.post('/books/1/retry').data
+        self.assertIn(b'data-pending="1"', page)
+        self.assertEqual(self.row()['match_choice'], '')
         enrich_one(reopened)
-        self.assertEqual(self.row()['status'], 'matched')
-        self.assertEqual(json.loads(self.row()['metadata_json'])['match']['key'], '/works/OL2W')
+        self.assertEqual(self.row()['status'], 'ambiguous')
+        self.assertEqual(self.client.get('/status').json['books'][0]['status'], 'ambiguous')
+        self.assertIn(b'data-match-choice="1"', self.client.get('/books/1').data)
+        choices = self.client.get('/books/1/match-options').json
+        self.assertEqual(len(choices['candidates']), 2)
+        self.assertEqual(self.client.post('/books/1/match/select', data={
+            'csrf': self.csrf, 'choice': 0, 'revision': choices['revision']}).status_code, 200)
+        self.assertEqual(self.row()['match_choice'], '/works/OL1W')
         self.post('/books/1/edit', title='Another title')
         self.assertEqual(self.row()['match_choice'], '')
+
+    @patch('app.requests.get')
+    def test_retry_checks_provider_for_same_author_matches(self, get):
+        candidates = self.candidates()
+        for candidate in candidates:
+            candidate['match']['author_name'] = ['Alice Author']
+        get.return_value.json.return_value = {'docs': [candidate['match'] for candidate in candidates]}
+        self.post('/books', title='Shared name', author='Alice Author')
+        with connect(self.app) as db:
+            db.execute("UPDATE titles SET status='matched',match_choice=?,metadata_json=? WHERE id=1",
+                       ('/works/OL2W', json.dumps(candidates[1])))
+        self.post('/books/1/retry')
+        enrich_one(self.app)
+        self.assertEqual(self.row()['status'], 'ambiguous')
+        self.assertEqual(len(self.client.get('/books/1/match-options').json['candidates']), 2)
+        self.assertIn(b'data-match-choice="1"', self.client.get('/books/1').data)
+
+    def test_retry_with_one_match_does_not_require_chooser(self):
+        self.make_ambiguous()
+        self.app.config['LOOKUP'] = lambda item: resolve_candidates(self.candidates()[:1], item)
+        self.post('/books/1/retry')
+        enrich_one(self.app)
+        self.assertEqual(self.row()['status'], 'matched')
+        self.assertEqual(self.client.get('/books/1/match-options').status_code, 409)
+        self.assertNotIn(b'data-match-choice="1"', self.client.get('/books/1').data)
 
     def test_selection_rejects_stale_invalid_and_missing_csrf(self):
         row = self.make_ambiguous()

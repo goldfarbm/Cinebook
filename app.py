@@ -1170,8 +1170,9 @@ def create_app(config=None):
     @app.post('/books/<int:book_id>/retry')
     def retry(book_id):
         get_book(book_id)
+        # A deliberate new lookup must offer ambiguous matches again instead of reusing the saved choice.
         with connect(app) as db:
-            db.execute("UPDATE titles SET status='pending',error='',revision=revision+1 WHERE id=?", (book_id,))
+            db.execute("UPDATE titles SET status='pending',match_choice='',error='',revision=revision+1 WHERE id=?", (book_id,))
         flash('Metadata lookup queued.')
         return redirect(url_for('detail', book_id=book_id))
 
