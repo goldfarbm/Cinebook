@@ -41,10 +41,10 @@ def connect(app):
 # Persist one pair of progress values; templates translate them to reading or watching labels.
 READING_STATUSES = ('To Be Read', 'Read')
 COLLECTION_CATEGORIES = {'book': 'Books', 'movie': 'Movies', 'tv': 'TV Shows'}
-SINGULAR_CATEGORIES = {'book': 'book', 'movie': 'movie', 'tv': 'TV show'}
+SINGULAR_CATEGORIES = {'book': 'Book', 'movie': 'Movie', 'tv': 'TV Show'}
 TITLE_LABELS = {'book': 'Book', 'movie': 'Movie', 'tv': 'TV show'}
 ALL_CATEGORIES = {**COLLECTION_CATEGORIES, 'tv_season': 'Seasons', 'tv_episode': 'Episodes'}
-SINGULAR_CATEGORIES.update(tv_season='season', tv_episode='episode')
+SINGULAR_CATEGORIES.update(tv_season='Season', tv_episode='Episode')
 TITLE_LABELS.update(tv_season='Season', tv_episode='Episode')
 COLOUR_SCHEMES = {'forest': 'Paper & Forest', 'slate': 'Slate & Blue', 'plum': 'Parchment & Plum'}
 

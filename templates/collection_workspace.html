@@ -2,7 +2,7 @@
 <div class="workspace">
     <section class="collection">
         <div class="section-title">
-            <h2>{{ 'Your ' if children_parent is not defined else '' }}{{ category_label | capitalize if children_parent is defined else category_label }} <span class="count">{{ total }}</span></h2>
+            <h2>{{ 'Your ' if children_parent is not defined else '' }}{{ category_label | capitalize if children_parent is defined else collection_categories[category] }} <span class="count">{{ total }}</span></h2>
             <div class="collection-tools">
                 <span class="muted">{% if pending %}{{ pending }} lookup{{ 's' if pending != 1 }} queued{% else %}Your collection, at a glance{% endif %}</span>
                 <div class="view-toggle" role="group" aria-label="Collection view" hidden>
