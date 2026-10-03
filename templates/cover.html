@@ -1,0 +1,25 @@
+{# Shared cover: collection entries link to details; detail pages open the cover picker. #}
+<div class="cover-frame" {% if book.cover_status == 'pending' %}data-cover-pending="{{ book.id }}"{% endif %}>
+    {% if enable_cover_picker | default(false) %}
+        <button class="cover-trigger" type="button" data-book-id="{{ book.id }}" data-book-title="{{ book.title }}" data-kind="{{ book.kind }}" aria-label="Choose a cover for {{ book.title }}">
+    {% else %}
+        <a class="cover-link" href="{{ title_url(book) }}" aria-label="View {{ book.title }}">
+    {% endif %}
+        {# Cached artwork uses the original image; its display size is controlled by CSS. #}
+        {% if book.cover_key %}
+            <img class="cover-image" src="{{ url_for('cover', book_id=book.id) }}" alt="Cover of {{ book.title }}" loading="lazy" decoding="async">
+        {% endif %}
+        {# The styled title cover is the fallback when no cached image is available. #}
+        <span class="cover color-{{ book.id % 5 }}" {% if book.cover_key %}hidden{% endif %}>
+            <span class="cover-small">CINEBOOK COLLECTION</span>
+            <span class="cover-title">{{ book.title }}</span>
+            <span class="cover-author">{{ book.display_author }}</span>
+            <span class="cover-mark">c.</span>
+        </span>
+    {# Close the same wrapper selected above so both contexts share identical artwork. #}
+    {% if enable_cover_picker | default(false) %}
+        </button>
+    {% else %}
+        </a>
+    {% endif %}
+</div>

@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block content %}
+    {# Front-page introduction and decorative book spines. #}
+    <section class="hero">
+        <div>
+            <p class="eyebrow">MY PERSONAL COLLECTION</p>
+            <h1>Yes, This looks<br>just like Goodreads.</h1>
+            <p class="intro">What was that book about that guy?.<br>Your personal external memory - because you're getting old.</p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+            <span class="spine s1">STORIES</span>
+            <span class="spine s2">WORLDS</span>
+            <span class="spine s3">IDEAS</span>
+            <span class="art-label">Collected by you.</span>
+        </div>
+    </section>
+    {# Category links retain the current search and show each collection’s saved title count. #}
+    <nav class="category-nav" aria-label="Collection category">
+        {% for key, label in categories.items() %}
+            <a href="{{ url_for('index', category=key, q=query) }}" {% if category == key %}aria-current="page"{% endif %}>{{ label }} <span class="category-count">{{ category_counts.get(key, 0) }}</span></a>
+        {% endfor %}
+    </nav>
+    {# The same collection workspace is also used for TV seasons and episodes. #}
+    {% include 'collection_workspace.html' %}
+{% endblock %}

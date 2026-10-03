@@ -1,0 +1,110 @@
+{# Reusable collection: the context selects Books, Movies, TV Shows, seasons, or episodes. #}
+<div class="workspace">
+    <section class="collection">
+        <div class="section-title">
+            <h2>{{ 'Your ' if children_parent is not defined else '' }}{{ category_label | capitalize if children_parent is defined else category_label }} <span class="count">{{ total }}</span></h2>
+            <div class="collection-tools">
+                <span class="muted">{% if pending %}{{ pending }} lookup{{ 's' if pending != 1 }} queued{% else %}Your collection, at a glance{% endif %}</span>
+                <div class="view-toggle" role="group" aria-label="Collection view" hidden>
+                    <button type="button" data-library-view="grid" aria-pressed="{{ 'true' if default_view == 'grid' else 'false' }}" aria-controls="library-books">Grid</button>
+                    <button type="button" data-library-view="list" aria-pressed="{{ 'true' if default_view == 'list' else 'false' }}" aria-controls="library-books">List</button>
+                </div>
+            </div>
+        </div>
+        {# Child collections search within their parent; top-level collections use the current category. #}
+        <form class="search" method="get"{% if children_parent is defined %} action="{{ title_url(children_parent) }}"{% endif %}>
+            <input type="hidden" name="category" value="{{ category }}">
+            <label class="sr-only" for="search">Search your library</label>
+            <input id="search" name="q" value="{{ query }}" placeholder="{{ 'Search by title, author, or ISBN…' if category == 'book' else 'Search by title…' }}">
+            <button type="submit" class="quiet">Search</button>
+            {% if query %}
+                <a href="{{ title_url(children_parent) if children_parent is defined else url_for('index', category=category) }}">Clear</a>
+            {% endif %}
+        </form>
+        {# Each entry shares cover, match-selection, and status partials across grid and list views. #}
+        {% if books %}
+            <div id="library-books" class="grid" data-view="{{ default_view }}">
+                {% for book in books %}
+                    <article class="book-entry">
+                        {% include 'cover.html' %}
+                        <div class="book-card" {% if book.status == 'pending' %}data-pending="{{ book.id }}"{% endif %}>
+                            <div class="book-info">
+                                <h3><a class="book-title-link" href="{{ title_url(book) }}">{{ book.title }}</a></h3>
+                                <p>{% include 'author_links.html' %}</p>
+                                <p class="book-blurb" {% if book.description_status == 'pending' %}data-description-pending="{{ book.id }}"{% endif %}>{% if book.status == 'ambiguous' %}Multiple titles found. Choose which one you intended.{% elif book.description %}{{ book.description | truncate(180) }}{% elif book.description_status == 'pending' %}Fetching description…{% elif book.description_status == 'failed' %}Description lookup failed. Open title to retry.{% else %}No description available.{% endif %}</p>
+                                <div class="book-meta">
+                                    {% if book.position is defined and book.position is not none %}
+                                        <span>{{ 'Season' if book.kind == 'tv_season' else 'Episode' }} {{ book.position }}</span>
+                                    {% endif %}
+                                    <span>{{ book.match.get('first_publish_year') or categories[category] }}</span>
+                                    <span class="badge {{ book.status }}">{{ {'pending':'Looking up…','matched':'Metadata saved','unmatched':'No exact match','failed':'Retry needed','ambiguous':'Choose a match'}[book.status] }}</span>
+                                </div>
+                                {% include 'match_choice.html' %}
+                            </div>
+                        </div>
+                        {% set status_location = 'library' %}
+                        {% include 'reading_status.html' %}
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="empty"><span class="empty-symbol">▤</span><h3>{% if query %}No Titles Found{% elif category == 'book' %}Every library starts with one book.{% else %}No {{ category_label }} in your collection yet.{% endif %}</h3>{% if query %}<p class="search-empty-hint">try another title or author</p>{% else %}<p>Add a favorite, or import a list to start your collection.</p>{% endif %}</div>
+        {% endif %}
+    </section>
+    {# Adding and importing use the same category and, for TV children, the same parent ID. #}
+    <aside>
+        <section class="panel">
+            <p class="eyebrow">MAKE ROOM FOR A NEW STORY</p>
+            <h2>Add {{ 'an' if category == 'tv_episode' else 'a' }} {{ singular_categories[category] }}</h2>
+            <form method="post" action="{{ url_for('add') }}">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <input type="hidden" name="kind" value="{{ category }}">
+                {% if children_parent is defined %}
+                    <input type="hidden" name="parent_id" value="{{ children_parent.id }}">
+                {% endif %}
+                <label for="new-title">Title <span class="required">*</span></label>
+                <input id="new-title" name="title" required maxlength="500" placeholder="{{ {'book': 'e.g. The Left Hand of Darkness', 'movie': 'e.g. Arrival', 'tv': 'e.g. Severance', 'tv_season': 'e.g. Season 1', 'tv_episode': 'Episode title'}[category] }}">
+                {% if children_parent is defined %}
+                    <label for="position">{{ 'Season' if category == 'tv_season' else 'Episode' }} number <span class="optional">optional</span></label>
+                    <input id="position" type="number" name="position" min="0" max="9999">
+                {% endif %}
+                <label for="new-author">{{ 'Author' if category == 'book' else 'Director' if category == 'movie' else 'Creator' }} <span class="optional">optional</span></label>
+                <input id="new-author" name="author" maxlength="500" placeholder="{{ 'e.g. Ursula K. Le Guin' if category == 'book' else 'Optional name' }}">
+                {% if category == 'book' %}
+                    <label for="new-isbn">ISBN <span class="optional">optional</span></label>
+                    <input id="new-isbn" name="isbn" placeholder="10 or 13 characters">
+                {% endif %}
+                {% if category in ['movie','tv'] %}
+                    <label for="new-eidr">EIDR <span class="optional">optional</span></label>
+                    <input id="new-eidr" name="eidr" maxlength="100" placeholder="10.5240/XXXX-XXXX-XXXX-XXXX-XXXX-C">
+                {% endif %}
+                <label for="new-reading-status">Status</label>
+                <select id="new-reading-status" name="reading_status">
+                    <option value="To Be Read">{{ 'To Be Read' if category == 'book' else 'To Watch' }}</option>
+                    <option value="Read">{{ 'Read' if category == 'book' else 'Watched' }}</option>
+                </select>
+                <p class="hint">{% if category == 'book' %}An ISBN helps find the right book. {% endif %}We’ll look up its details automatically.</p>
+                <button class="primary" type="submit">+ Add to library</button>
+            </form>
+        </section>
+        {# Imports accept the documented file formats and retain the current collection scope. #}
+        <section class="panel import-panel">
+            <h2>Already have a list?</h2>
+            <p class="hint">Bring your {{ category_label }} along. Import up to 25 at a time.</p>
+            <form method="post" action="{{ url_for('import_books') }}" enctype="multipart/form-data">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <input type="hidden" name="kind" value="{{ category }}">
+                {% if children_parent is defined %}
+                    <input type="hidden" name="parent_id" value="{{ children_parent.id }}">
+                {% endif %}
+                <label for="file">CSV, plain text, or JSON</label>
+                <input id="file" type="file" name="file" accept=".csv,.txt,.json" required>
+                <button class="secondary" type="submit">Import titles ↑</button>
+            </form>
+            <details>
+                <summary>How to format your list</summary>
+                <p class="hint">CSV: a <code>title</code> header, with optional <code>author</code>, <code>isbn</code>, and <code>notes</code>, and <code>reading_status</code> columns. Movies and TV Shows also accept an optional <code>eidr</code> column. Status is <code>{{ 'Read' if category == 'book' else 'Watched' }}</code> or <code>{{ 'To Be Read' if category == 'book' else 'To Watch' }}</code>. Add a <code>kind</code> column (<code>book</code>, <code>movie</code>, or <code>tv</code>) for mixed collections. Text: one title per line. JSON: an array of objects with those fields, or a Cinebook export. Imported entries are looked up again.</p>
+            </details>
+        </section>
+    </aside>
+</div>

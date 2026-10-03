@@ -1,0 +1,172 @@
+{% extends 'base.html' %}
+{% block title %}{{ page_heading | default(book.title) }} · Cinebook{% endblock %}
+{% block content %}
+    {# Use the title type and metadata provider to label this shared details page. #}
+    {% set item_label = singular_categories[book.kind] %}
+    {% set provider = book.metadata.get('provider', 'Open Library' if book.kind == 'book' else 'Apple iTunes' if book.kind == 'movie' else 'TVmaze') %}
+    {# Keep Home first, followed by the containing collection and optional TV hierarchy. #}
+    <nav class="back-links" aria-label="Page navigation">
+        <a class="back" href="{{ url_for('index') }}">Home</a>
+        <a class="back" href="{{ collection_url(book) }}">← Back to {{ 'your TV Shows' if book.kind == 'tv' else 'seasons' if book.kind == 'tv_season' else 'episodes' if book.kind == 'tv_episode' else 'your ' ~ categories[book.kind] }}</a>
+    </nav>
+    {% if ancestors is defined %}
+        <nav class="breadcrumbs" aria-label="TV hierarchy">
+            <a href="{{ url_for('index', category='tv') }}">TV Shows</a>
+            {% for ancestor in ancestors %}
+                <span>›</span>
+                <a href="{{ title_url(ancestor) }}">{{ ancestor.title }}</a>
+            {% endfor %}
+            <span>›</span>
+            <span aria-current="page">{{ book.title }}</span>
+        </nav>
+    {% endif %}
+    <section class="detail-heading" {% if book.status == 'pending' %}data-pending="{{ book.id }}"{% endif %}>
+        <p class="eyebrow">IN YOUR COLLECTION</p>
+        <h1>{{ page_heading | default(book.title) }}</h1>
+        <p class="intro">{% include 'author_links.html' %}</p>
+        {% include 'match_choice.html' %}
+        {% if children_parent is not defined and book.kind in ['tv', 'tv_season'] %}
+            <p><a class="browse-children" href="{{ title_url(book) }}">Browse {{ 'seasons' if book.kind == 'tv' else 'episodes' }} →</a></p>
+        {% endif %}
+    </section>
+    {# TV parent pages embed the shared collection workspace for seasons or episodes. #}
+    {% if children_parent is defined %}
+        <section class="children-collection" aria-label="{{ categories[category] }}">
+            <div class="children-toolbar">
+                <p class="hint">{{ 'Select a season to browse its episodes.' if category == 'tv_season' else 'Select an episode to view its details.' }} Saved titles are available offline.</p>
+                <form method="post" action="{{ url_for('refresh_tv_children', book_id=children_parent.id) }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <button class="secondary" type="submit">Refresh {{ category_label }}</button>
+                </form>
+            </div>
+            {% if hierarchy_error %}
+                <p class="notice" role="status">{{ hierarchy_error }}</p>
+            {% endif %}
+            {% include 'collection_workspace.html' %}
+        </section>
+    {% endif %}
+    {# Saved artwork, descriptions, and metadata remain available while lookups run. #}
+    <div class="detail-grid">
+        <section class="panel">
+            <h2>{{ title_labels[book.kind] }} information</h2>
+            <div class="detail-cover">
+                {% set enable_cover_picker = true %}
+                {% include 'cover.html' %}
+            </div>
+            <p class="hint">{% if book.status == 'ambiguous' %}Choose a title to fetch its cover.{% else %}{{ {'pending':'Cover lookup queued…','available':'Cover saved locally','unavailable':'No cover available','failed':'Cover lookup failed'}[book.cover_status] }}{% endif %}</p>
+            {% if book.cover_error %}
+                <p class="hint">{{ book.cover_error }}</p>
+            {% endif %}
+            {% if book.status != 'ambiguous' %}
+                <form method="post" action="{{ url_for('retry_cover', book_id=book.id) }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <button type="submit" class="secondary">Retry cover lookup</button>
+                </form>
+            {% endif %}
+            <section class="description-section" {% if book.description_status == 'pending' %}data-description-pending="{{ book.id }}"{% endif %}>
+                <h2>About this {{ item_label }}</h2>
+                {% if book.status == 'ambiguous' %}
+                    <p class="hint">Choose the intended title to fetch its description and cover.</p>
+                {% elif book.description %}
+                    <p class="book-description">{{ book.description }}</p>
+                    <p class="hint">Description from {% if book.match.get('source_url') %}<a href="{{ book.match.source_url }}" rel="noreferrer">{{ provider }}</a>{% else %}{{ provider }}{% endif %} · Saved locally</p>
+                {% elif book.description_status == 'pending' %}
+                    <p class="hint">Fetching description…</p>
+                {% elif book.description_status == 'failed' %}
+                    <p class="hint">{{ book.description_error }}</p>
+                {% else %}
+                    <p class="hint">No description is available for this {{ item_label }} from {{ provider }}.</p>
+                {% endif %}
+                {% if book.description and book.description_status == 'failed' %}
+                    <p class="hint">{{ book.description_error }} Your saved description is still available.</p>
+                {% endif %}
+                {% if book.status != 'ambiguous' and book.description_status in ['failed', 'unavailable'] %}
+                    <form method="post" action="{{ url_for('retry_description', book_id=book.id) }}">
+                        <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                        <button class="secondary" type="submit">Retry description lookup</button>
+                    </form>
+                {% endif %}
+            </section>
+            {# Display type-specific metadata, including episode numbering and optional EIDR links. #}
+            <dl>
+                <dt>Metadata status</dt>
+                <dd>{{ {'pending':'Lookup queued','matched':'Exact search match saved','unmatched':'No exact match found','failed':'Lookup failed','ambiguous':'Choose the intended title'}[book.status] }}</dd>
+                <dt>{{ 'First published' if book.kind == 'book' else 'Released' }}</dt>
+                <dd>{{ book.match.get('first_publish_year', 'Unknown') }}</dd>
+                <dt>{{ 'Authors' if book.kind == 'book' else 'Director / creator' }}</dt>
+                <dd>{% include 'author_links.html' %}</dd>
+                <dt>{{ 'Subjects' if book.kind == 'book' else 'Genres' }}</dt>
+                <dd>{{ book.match.get('subject', [])[:8] | join(' · ') or 'None available' }}</dd>
+                {% if book.kind in ['tv_season','tv_episode'] %}
+                    <dt>{{ 'Season' if book.kind == 'tv_season' else 'Episode' }} number</dt>
+                    <dd>{{ book.position if book.position is not none else 'Special / unnumbered' }}</dd>
+                    <dt>Air date</dt>
+                    <dd>{{ book.match.get('airdate') or 'Unknown' }}</dd>
+                    {% if book.match.get('runtime') %}
+                        <dt>Runtime</dt>
+                        <dd>{{ book.match.runtime }} minutes</dd>
+                    {% endif %}
+                {% endif %}
+                {% if book.kind in ['movie','tv'] %}
+                    <dt>EIDR</dt>
+                    <dd>{% if book.eidr %}<a href="https://ui.eidr.org/content/{{ book.eidr }}" rel="noreferrer">{{ book.eidr }}</a>{% else %}Not provided{% endif %}</dd>
+                {% endif %}
+                <dt>Added</dt>
+                <dd>{{ book.added_at[:10] }}</dd>
+            </dl>
+            {% if book.status == 'unmatched' %}
+                <p class="hint">{% if book.kind == 'book' %}Try adding an ISBN or adjusting the title and author.{% else %}Try adjusting the title{% if book.kind == 'movie' %} or director{% endif %}.{% endif %} Your {{ item_label }} is saved even when no match is available.</p>
+            {% endif %}
+            {% if book.error %}
+                <p class="hint">{{ book.error }}</p>
+            {% endif %}
+            {% if book.status == 'matched' %}
+                <p class="hint">Review these details: different titles can share a name. Your entered title is preserved; other details come from {{ provider }}.</p>
+            {% endif %}
+            <form method="post" action="{{ url_for('retry', book_id=book.id) }}">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <button type="submit" class="secondary">Look up again</button>
+            </form>
+            <details>
+                <summary>Stored metadata JSON</summary>
+                <p class="hint">{% if metadata_filtered %}Some fields are hidden by your settings. {% endif %}<a href="{{ url_for('settings') }}">Choose displayed JSON fields</a></p>
+                {# Only the displayed JSON fields are filtered; complete metadata remains stored. #}
+                <pre>{{ displayed_metadata | tojson(indent=2) }}</pre>
+            </details>
+        </section>
+        <section class="panel">
+            {# The editor keeps user-entered fields and reviews separate from fetched metadata. #}
+            <h2>Edit your {{ item_label }}</h2>
+            {% set status_location = 'detail' %}
+            {% include 'reading_status.html' %}
+            <form method="post" action="{{ url_for('edit', book_id=book.id) }}">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <label for="title">Title</label>
+                <input id="title" name="title" value="{{ book.title }}" required maxlength="500">
+                <label for="author">{{ 'Author' if book.kind == 'book' else 'Director' if book.kind == 'movie' else 'Creator' }}</label>
+                <input id="author" name="author" value="{{ book.author }}" maxlength="500">
+                {% if book.kind == 'book' %}
+                    <label for="isbn">ISBN</label>
+                    <input id="isbn" name="isbn" value="{{ book.isbn }}">
+                {% endif %}
+                {% if book.kind in ['movie','tv'] %}
+                    <label for="eidr">EIDR <span class="optional">optional</span></label>
+                    <input id="eidr" name="eidr" value="{{ book.eidr }}" maxlength="100" placeholder="10.5240/XXXX-XXXX-XXXX-XXXX-XXXX-C">
+                    <p class="hint">Enter the title’s Entertainment Identifier Registry ID. <a href="https://ui.eidr.org/" rel="noreferrer">Find an EIDR</a></p>
+                {% endif %}
+                <label for="notes">My Review</label>
+                <textarea id="notes" name="notes" rows="5" maxlength="10000">{{ book.notes }}</textarea>
+                <button type="submit" class="primary">Save changes</button>
+            </form>
+            {# Removing a TV parent also removes the descendants described in this confirmation area. #}
+            <details class="remove">
+                <summary>Remove this {{ item_label }}</summary>
+                <p class="hint">This removes the {{ item_label }} and its saved metadata{% if book.kind in ['tv','tv_season'] %}, including its {{ 'seasons and episodes' if book.kind == 'tv' else 'episodes' }}{% endif %} from your collection.</p>
+                <form method="post" action="{{ url_for('delete', book_id=book.id) }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <button class="danger" type="submit">Remove permanently</button>
+                </form>
+            </details>
+        </section>
+    </div>
+{% endblock %}

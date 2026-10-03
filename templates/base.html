@@ -1,0 +1,72 @@
+{# Shared page shell: saved appearance and view preferences are supplied by the app. #}
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}" data-scheme="{{ colour_scheme }}">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>{% block title %}Cinebook · Your library{% endblock %}</title>
+        <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+        <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+    </head>
+    <body data-default-view="{{ default_view }}">
+        {# Global navigation and JSON export; the export data attributes are used by app.js. #}
+        <header class="topbar">
+            <a class="brand" href="{{ url_for('index') }}"><span class="brand-icon">c.</span> cinebook</a>
+            <span class="local"><span class="dot"></span> Your local library</span>
+            <a class="export settings-link" href="{{ url_for('settings') }}">Settings</a>
+            <a class="export" id="export-json" href="{{ url_for('export') }}" data-save-url="{{ url_for('save_export') }}" data-csrf="{{ session.csrf }}">Export JSON ↗</a>
+        </header>
+        {# Flash messages and asynchronous lookup notifications appear above each page’s content. #}
+        <main>
+            <div id="export-message" class="notice" role="status" hidden></div>
+            {% for message in get_flashed_messages() %}
+                <div class="notice" role="status">
+                    {{ message }}
+                </div>
+            {% endfor %}
+            <div id="updated" class="notice" hidden>
+                Title information updated.
+                <a href="">Refresh this page</a>
+                to see it.
+            </div>
+            {% block content %}
+            {% endblock %}
+        </main>
+        {# Shared modal hosts: JavaScript loads cover candidates and handles the selected cover. #}
+        <dialog id="cover-picker" aria-labelledby="cover-picker-title" data-csrf="{{ session.csrf }}">
+            <header class="picker-header">
+                <div>
+                    <h2 id="cover-picker-title">Choose a cover</h2>
+                    <p id="cover-picker-book" class="hint"></p>
+                </div>
+                <button id="cover-picker-close" type="button" aria-label="Close cover picker">×</button>
+            </header>
+            <p id="cover-picker-message" role="status">Loading covers…</p>
+            <div id="cover-picker-options" class="cover-options"></div>
+            <div class="picker-footer">
+                <button id="cover-picker-retry" class="secondary" type="button" hidden>Try again</button>
+                <button id="cover-picker-more" class="secondary" type="button" hidden>More covers</button>
+            </div>
+        </dialog>
+        {# Resolve ambiguous metadata matches before fetching the intended title’s details. #}
+        <dialog id="match-picker" aria-labelledby="match-picker-title" data-csrf="{{ session.csrf }}">
+            <header class="picker-header">
+                <div>
+                    <h2 id="match-picker-title">Which title did you mean?</h2>
+                    <p id="match-picker-title-name" class="hint"></p>
+                </div>
+                <button id="match-picker-close" type="button" aria-label="Choose later">×</button>
+            </header>
+            <p id="match-picker-message" role="status">Loading matching titles…</p>
+            <div id="match-picker-options" class="match-options"></div>
+            <div class="picker-footer">
+                <button id="match-picker-retry" class="secondary" type="button" hidden>Try again</button>
+                <button id="match-picker-later" class="secondary" type="button">Choose later</button>
+            </div>
+        </dialog>
+        <footer>
+            <span>Cinebook / this is not a waste of time.</span>
+            <span>Saved on this computer. Metadata from Open Library, Apple iTunes, <a href="https://www.tvmaze.com" rel="noreferrer">TVmaze</a>, and Wikipedia.</span>
+        </footer>
+    </body>
+</html>

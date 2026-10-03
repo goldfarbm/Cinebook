@@ -1,0 +1,18 @@
+{# Shared status form: location and search values return the user to the current collection. #}
+<form class="reading-status-form" method="post" action="{{ url_for('change_reading_status', book_id=book.id) }}">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <input type="hidden" name="location" value="{{ status_location }}">
+    {% if status_location == 'library' %}
+        <input type="hidden" name="q" value="{{ query }}">
+    {% endif %}
+    <label for="reading-status-{{ book.id }}">Status<span class="sr-only"> for {{ book.title }}</span></label>
+    <div class="status-controls">
+        <select id="reading-status-{{ book.id }}" name="reading_status">
+            {# Stored status values are shared; screen labels use reading or watching terminology. #}
+            {% for value in ['To Be Read', 'Read'] %}
+                <option value="{{ value }}" {% if book.reading_status == value %}selected{% endif %}>{{ value if book.kind == 'book' else {'Read': 'Watched', 'To Be Read': 'To Watch'}[value] }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="status-save">Save</button>
+    </div>
+</form>

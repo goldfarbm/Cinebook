@@ -1,0 +1,4 @@
+{# Only ambiguous titles show this control; app.js opens the shared match-picker modal. #}
+{% if book.status == 'ambiguous' %}
+    <button type="button" class="match-choice-trigger" data-match-choice="{{ book.id }}">Choose the intended {{ singular_categories[book.kind] }}</button>
+{% endif %}

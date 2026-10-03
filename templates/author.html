@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+{% block title %}Books by {{ name }} · Cinebook{% endblock %}
+{% block content %}
+    {# Home follows the saved default category; the books link opens the Books collection. #}
+    <nav class="back-links" aria-label="Page navigation">
+        <a class="back" href="{{ url_for('index') }}">Home</a>
+        <a class="back" href="{{ url_for('index', category='book') }}">← Back to your books</a>
+    </nav>
+    <section class="detail-heading">
+        <p class="eyebrow">YOUR LOCAL COLLECTION</p>
+        <h1>{{ name }}</h1>
+        <p class="intro">All titles by this author in your library.</p>
+    </section>
+    <section class="panel">
+        <h2>Books by {{ name }} <span class="count">{{ local_books | length }}</span></h2>
+        {# Show saved books for this author, including their covers and reading status. #}
+        {% if local_books %}
+            <ul class="author-library-list">
+                {% for book in local_books %}
+                    <li>
+                        {% include 'cover.html' %}
+                        <div class="author-result-info">
+                            <a class="book-title-link" href="{{ url_for('detail', book_id=book.id) }}">{{ book.title }}</a>
+                            {% if book.match.get('first_publish_year') %}
+                                <span class="muted"> · {{ book.match.first_publish_year }}</span>
+                            {% endif %}
+                        </div>
+                        <span class="badge">{{ book.reading_status }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <h3 class="search-empty-title">No Titles Found</h3><p class="search-empty-hint">try another title or author</p>
+        {% endif %}
+    </section>
+{% endblock %}

@@ -1,0 +1,110 @@
+{% extends 'base.html' %}
+{% block title %}Settings · Cinebook{% endblock %}
+{% block content %}
+    <nav class="back-links" aria-label="Page navigation">
+        <a class="back" href="{{ url_for('index') }}">Home</a>
+        <a class="back" href="{{ url_for('index', category='book') }}">← Back to your books</a>
+    </nav>
+    <section class="detail-heading">
+        <p class="eyebrow">MAKE CINEBOOK YOUR OWN</p>
+        <h1>Settings</h1>
+        <p class="intro">Customize your local library.</p>
+    </section>
+    {# Preference buttons submit immediately; metadata field selections use their own Save button. #}
+    <section class="panel settings-panel">
+        <h2>Appearance</h2>
+        <p class="hint">Choose light or dark mode for all pages.</p>
+        <div class="view-toggle settings-default-view" role="group" aria-label="Appearance">
+            {% for mode in ['light', 'dark'] %}
+                <form method="post" action="{{ url_for('save_settings') }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <input type="hidden" name="action" value="theme">
+                    <input type="hidden" name="theme" value="{{ mode }}">
+                    <button type="submit" aria-pressed="{{ 'true' if theme == mode else 'false' }}">{{ mode | capitalize }}</button>
+                </form>
+            {% endfor %}
+        </div>
+        {# Swatches preview each scheme using the currently selected light or dark mode. #}
+        <h3 class="scheme-heading">Colour scheme</h3>
+        <p class="hint">Each scheme includes matching light and dark colours.</p>
+        <div class="scheme-options" role="group" aria-label="Colour scheme">
+            {% for key, label in colour_schemes.items() %}
+                <form method="post" action="{{ url_for('save_settings') }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <input type="hidden" name="action" value="colour_scheme">
+                    <input type="hidden" name="colour_scheme" value="{{ key }}">
+                    <button class="secondary scheme-option" type="submit" aria-pressed="{{ 'true' if colour_scheme == key else 'false' }}"><span>{{ label }}</span><span class="scheme-preview" data-scheme="{{ key }}" data-theme="{{ theme }}" aria-hidden="true"><span class="sample-paper"></span><span class="sample-panel"></span><span class="sample-ink"></span><span class="sample-accent"></span><span class="sample-border"></span></span></button>
+                </form>
+            {% endfor %}
+        </div>
+    </section>
+    <section class="panel settings-panel">
+        {# This preference controls the collection opened by Home and the app’s initial page. #}
+        <h2>Default category</h2>
+        <p class="hint">Choose the collection shown when you open the app or select Home.</p>
+        <div class="view-toggle settings-default-view" role="group" aria-label="Default category">
+            {% for key, label in collection_categories.items() %}
+                <form method="post" action="{{ url_for('save_settings') }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <input type="hidden" name="action" value="default_category">
+                    <input type="hidden" name="default_category" value="{{ key }}">
+                    <button type="submit" aria-pressed="{{ 'true' if default_category == key else 'false' }}">{{ label }}</button>
+                </form>
+            {% endfor %}
+        </div>
+    </section>
+    <section class="panel settings-panel">
+        {# The default applies to all collection pages; browsing can temporarily switch views. #}
+        <h2>Default view</h2>
+        <p class="hint">Choose the starting view for all collections, including seasons and episodes. You can switch views while browsing.</p>
+        <div class="view-toggle settings-default-view" role="group" aria-label="Default collection view">
+            {% for view in ['grid', 'list'] %}
+                <form method="post" action="{{ url_for('save_settings') }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <input type="hidden" name="action" value="default_view">
+                    <input type="hidden" name="default_view" value="{{ view }}">
+                    <button type="submit" aria-pressed="{{ 'true' if default_view == view else 'false' }}">{{ view | capitalize }}</button>
+                </form>
+            {% endfor %}
+        </div>
+    </section>
+    <section class="panel settings-panel">
+        {# Field visibility changes the JSON display without removing stored or exported metadata. #}
+        <h2>Displayed metadata JSON fields</h2>
+        <p class="hint">Choose the fields shown in “Stored metadata JSON” on book pages. Nested fields can be chosen individually. Complete metadata stays saved and is included in exports. New fields are shown by default.</p>
+        {% if field_count %}
+            <form method="post" action="{{ url_for('save_settings') }}" id="metadata-settings-form">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <div class="settings-toolbar">
+                    <div>
+                        <label for="field-search">Find a JSON field</label>
+                        <input type="search" id="field-search" placeholder="e.g. title, isbn, subject">
+                    </div>
+                    <button type="button" class="secondary" id="fields-show-all">Show all</button>
+                    <button type="button" class="secondary" id="fields-hide-all">Hide all</button>
+                </div>
+                <p id="field-selection-count" class="hint" aria-live="polite"></p>
+                {# Known-field tokens let the app distinguish unchecked fields from newly discovered fields. #}
+                <div class="settings-groups">
+                    {% for group, fields in groups.items() %}
+                        <fieldset class="settings-field-group">
+                            <legend>{{ group }}</legend>
+                            {% for field in fields %}
+                                <label class="metadata-field-option" data-field-label="{{ field.label }}"><input type="hidden" name="known_field" value="{{ field.token }}"><input type="checkbox" name="field" value="{{ field.token }}" {% if field.visible %}checked{% endif %}><code>{{ field.label }}</code></label>
+                            {% endfor %}
+                        </fieldset>
+                    {% endfor %}
+                </div>
+                <p id="field-search-empty" class="hint" hidden>No fields match this search.</p>
+                <button type="submit" class="primary settings-save">Save settings</button>
+            </form>
+        {% else %}
+            <p class="hint">Metadata fields will appear here once you’ve added books and their information has been found.</p>
+        {% endif %}
+        <form method="post" action="{{ url_for('save_settings') }}" class="settings-reset">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <input type="hidden" name="action" value="reset">
+            <button type="submit" class="secondary">Reset to show all fields</button>
+        </form>
+    </section>
+{% endblock %}
