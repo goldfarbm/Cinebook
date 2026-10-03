@@ -1,3 +1,5 @@
+!(Cinebook.png)
+
 # Cinebook
 
 A local personal collection of books, movies, and TV shows. Flask serves the interface on loopback; SQLite stores your collection and JSON metadata on your computer. No accounts, cloud storage, remote fonts, or browser requests to external services. The server fetches metadata and artwork; saved information remains available offline.
