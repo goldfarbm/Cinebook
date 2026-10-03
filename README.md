@@ -1,4 +1,5 @@
-!(https://github.com/goldfarbm/Cinebook/blob/main/Cinebook.png)
+
+<p align="center"><img width="700" src="https://github.com/goldfarbm/Cinebook/blob/main/Cinebook.png" alt="Cinebook Header Image" /></p>
 
 # Cinebook
 
