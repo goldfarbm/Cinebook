@@ -52,6 +52,7 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(len(self.client.get('/export').json['titles']), 3)
 
     @patch('media.requests.get')
+    @patch('media.lookup_balloon', new=lambda *args: None)
     def test_lookup_uses_the_right_provider_and_strips_tv_html(self, get):
         response = Mock()
         get.return_value = response
@@ -118,6 +119,7 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(poster_url('https://is1-ssl.mzstatic.com/a.jpg'), 'https://is1-ssl.mzstatic.com/a.jpg')
 
     @patch('media.requests.get')
+    @patch('media.lookup_balloon', new=lambda *args: None)
     def test_movie_catalog_fallback_requires_exact_film_and_director(self, get):
         apple = Mock()
         apple.json.return_value = {'results': []}
@@ -133,5 +135,67 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(result['match']['key'], 'wikipedia:2')
         self.assertEqual(result['match']['author_name'], ['Denis Villeneuve'])
         self.assertEqual(result['match']['first_publish_year'], '2016')
+        self.assertEqual(result['match']['subject'], ['Science Fiction'])
         get.side_effect = [apple, wiki]
         self.assertIsNone(lookup({'kind': 'movie', 'title': 'Arrival', 'author': 'Wrong Director', 'isbn': ''}))
+
+    @patch('media.requests.get')
+    @patch('media.lookup_balloon', new=lambda *args: None)
+    def test_wikipedia_accepts_comedy_directed_by_without_early_film_keyword(self, get):
+        apple, wiki = Mock(), Mock()
+        apple.json.return_value = {'results': []}
+        title = '10 Things I Hate About You'
+        intro = (title + ' is a 1999 American teen romantic comedy directed by Gil Junger '
+                 '(in his directorial debut) from a screenplay by Karen McCullah Lutz and Kirsten Smith. '
+                 "Loosely inspired by and based on William Shakespeare's comedy The Taming of the Shrew, "
+                 'it stars Julia Stiles, Heath Ledger, Joseph Gordon-Levitt, Larisa Oleynik, Larry Miller, '
+                 'Andrew Keegan, David Krumholtz, Susan May Pratt, and Gabrielle Union. '
+                 '\nIn the film, high-school student Cameron James is unable to date Bianca.')
+        wiki.json.return_value = {'query': {'pages': {
+            '398934': {'pageid': 398934, 'title': title, 'extract': intro}}}}
+        for author in ('', 'Gil Junger', 'Wrong Director'):
+            with self.subTest(author=author):
+                get.side_effect = [apple, wiki]
+                result = lookup({'kind': 'movie', 'title': title, 'author': author, 'isbn': ''})
+                if author == 'Wrong Director':
+                    self.assertIsNone(result)
+                else:
+                    self.assertEqual(result['match']['key'], 'wikipedia:398934')
+                    self.assertEqual(result['match']['author_name'], ['Gil Junger'])
+
+    @patch('media.requests.get')
+    @patch('media.lookup_balloon', new=lambda *args: None)
+    def test_wikipedia_director_excludes_directorial_debut_phrase(self, get):
+        apple, wiki = Mock(), Mock()
+        apple.json.return_value = {'results': []}
+        title = 'Anchorman: The Legend of Ron Burgundy'
+        for phrase in ('in his directorial debut', 'in her directorial debut',
+                       'in their feature directorial debut'):
+            with self.subTest(phrase=phrase):
+                wiki.json.return_value = {'query': {'pages': {
+                    '709490': {'pageid': 709490, 'title': title, 'extract':
+                        title + ' is a 2004 American satirical comedy film directed by Adam McKay '
+                        + phrase + ', produced by Judd Apatow, starring Will Ferrell.'}}}}
+                for author in ('Adam McKay', 'Wrong Director'):
+                    get.side_effect = [apple, wiki]
+                    result = lookup({'kind': 'movie', 'title': title, 'author': author, 'isbn': ''})
+                    if author == 'Wrong Director':
+                        self.assertIsNone(result)
+                    else:
+                        self.assertEqual(result['match']['key'], 'wikipedia:709490')
+                        self.assertEqual(result['match']['author_name'], ['Adam McKay'])
+
+    @patch('media.requests.get')
+    @patch('media.lookup_balloon', new=lambda *args: None)
+    def test_wikipedia_rejects_other_media_that_mention_a_film(self, get):
+        apple, wiki = Mock(), Mock()
+        apple.json.return_value = {'results': []}
+        for intro in ('Example is a song from a film.',
+                      'Example is a comedy television series directed by Someone.',
+                      'Example is a novel adapted into a film.',
+                      'Example is a soundtrack album for a film.'):
+            with self.subTest(intro=intro):
+                wiki.json.return_value = {'query': {'pages': {
+                    '1': {'pageid': 1, 'title': 'Example', 'extract': intro}}}}
+                get.side_effect = [apple, wiki]
+                self.assertIsNone(lookup({'kind': 'movie', 'title': 'Example', 'author': '', 'isbn': ''}))

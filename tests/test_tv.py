@@ -42,7 +42,8 @@ class TVHierarchyTests(unittest.TestCase):
         season = self.row('tvmaze-season:20')
         page = self.client.get(f'/tv/seasons/{season["id"]}/episodes')
         self.assertEqual(page.status_code, 200)
-        for content in [b'List', b'Grid', b'Add an episode', b'name="parent_id"', b'Watched', b'Special', b'Pilot summary.']:
+        self.assertRegex(page.data, rb'Add an [eE]pisode')
+        for content in [b'List', b'Grid', b'name="parent_id"', b'Watched', b'Special', b'Pilot summary.']:
             self.assertIn(content, page.data)
         self.assertEqual(self.fetch.call_count, 2)
         self.fetch.side_effect = requests.ConnectionError()

@@ -13,6 +13,9 @@
         <header class="topbar">
             <a class="brand" href="{{ url_for('index') }}"><span class="brand-icon">c.</span> cinebook</a>
             <span class="local"><span class="dot"></span> Your local library</span>
+            {% if request.endpoint != 'index' %}
+                <a class="export tags-link" href="{{ url_for('manage_tags') }}">Tags</a>
+            {% endif %}
             <a class="export settings-link" href="{{ url_for('settings') }}">Settings</a>
             <a class="export" id="export-json" href="{{ url_for('export') }}" data-save-url="{{ url_for('save_export') }}" data-csrf="{{ session.csrf }}">Export JSON ↗</a>
         </header>
@@ -66,7 +69,7 @@
         </dialog>
         <footer>
             <span>Cinebook / this is not a waste of time.</span>
-            <span>Saved on this computer. Metadata from Open Library, Apple iTunes, <a href="https://www.tvmaze.com" rel="noreferrer">TVmaze</a>, and Wikipedia.</span>
+            <span>Saved on this computer. Metadata from <a href="https://api.balloonerismm.workers.dev/docs" rel="noreferrer">Balloonerismm</a>, <a href="https://www.omdbapi.com/" rel="noreferrer">OMDb</a>, Open Library, Apple iTunes, <a href="https://www.tvmaze.com" rel="noreferrer">TVmaze</a>, and Wikipedia.</span>
         </footer>
     </body>
 </html>

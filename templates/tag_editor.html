@@ -1,0 +1,19 @@
+<section class="title-tags" aria-labelledby="title-tags-heading">
+    <h3 id="title-tags-heading">Tags</h3>
+    <p class="hint">Choose tags for this title, or create your own. <a href="{{ url_for('manage_tags') }}">Manage tags</a></p>
+    <form method="post" action="{{ url_for('save_title_tags', book_id=book.id) }}">
+        <input type="hidden" name="csrf" value="{{ session.csrf }}">
+        {% set selected_ids = book.tags | map(attribute='id') | list %}
+        {% if available_tags %}
+            <fieldset class="tag-options">
+                <legend class="sr-only">Select tags</legend>
+                {% for tag in available_tags %}
+                    <label><input type="checkbox" name="tag_id" value="{{ tag.id }}"{% if tag.id in selected_ids %} checked{% endif %}> <span>{{ tag.name }}</span></label>
+                {% endfor %}
+            </fieldset>
+        {% else %}<p class="hint">Create your first tag below.</p>{% endif %}
+        <label for="new-title-tag">New tag <span class="optional">optional</span></label>
+        <input id="new-title-tag" name="new_tag" maxlength="60" placeholder="e.g. Favorites">
+        <button type="submit" class="secondary">Save tags</button>
+    </form>
+</section>

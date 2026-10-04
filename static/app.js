@@ -1,3 +1,27 @@
+const addCoverForm = document.getElementById('add-cover-form');
+if (addCoverForm) {
+  const fileInput = document.getElementById('cover-file');
+  const button = document.getElementById('add-cover-button');
+  const message = document.getElementById('add-cover-message');
+  fileInput.hidden = true;
+  button.type = 'button';
+  button.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      message.textContent = 'Choose a cover image no larger than 5 MB.';
+      message.hidden = false;
+      fileInput.value = '';
+      return;
+    }
+    button.disabled = true;
+    message.textContent = 'Saving cover…';
+    message.hidden = false;
+    addCoverForm.requestSubmit();
+  });
+}
+
 const exportLink = document.getElementById('export-json');
 const exportMessage = document.getElementById('export-message');
 let exporting = false;
@@ -64,6 +88,40 @@ if (libraryBooks && viewToggle) {
     const button = event.target.closest('[data-library-view]');
     if (!button) return;
     setLibraryView(button.dataset.libraryView);
+  });
+}
+
+const searchInput = document.getElementById('search');
+const searchSuggestions = document.getElementById('search-suggestions');
+if (searchInput && searchSuggestions) {
+  let suggestionTimer;
+  let suggestionRequest;
+  let suggestionVersion = 0;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(suggestionTimer);
+    suggestionRequest?.abort();
+    searchSuggestions.replaceChildren();
+    const version = ++suggestionVersion;
+    const query = searchInput.value.trim();
+    if (!query) return;
+    suggestionTimer = setTimeout(async () => {
+      const controller = new AbortController();
+      suggestionRequest = controller;
+      try {
+        const url = new URL(searchInput.dataset.suggestionsUrl, window.location.origin);
+        url.searchParams.set('q', query);
+        const response = await fetch(url, {signal: controller.signal});
+        if (!response.ok) return;
+        const data = await response.json();
+        if (version !== suggestionVersion) return;
+        searchSuggestions.replaceChildren(...data.suggestions.map(suggestion => {
+          const option = document.createElement('option');
+          option.value = suggestion.value;
+          option.label = suggestion.label;
+          return option;
+        }));
+      } catch (_) { /* Keep normal search usable if suggestions are unavailable. */ }
+    }, 150);
   });
 }
 

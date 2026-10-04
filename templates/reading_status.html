@@ -4,6 +4,8 @@
     <input type="hidden" name="location" value="{{ status_location }}">
     {% if status_location == 'library' %}
         <input type="hidden" name="q" value="{{ query }}">
+        {% if selected_letter %}<input type="hidden" name="letter" value="{{ selected_letter }}">{% endif %}
+        {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag.id }}">{% endif %}
     {% endif %}
     <label for="reading-status-{{ book.id }}">Status<span class="sr-only"> for {{ book.title }}</span></label>
     <div class="status-controls">

@@ -2,13 +2,54 @@
 {% block title %}Settings · Cinebook{% endblock %}
 {% block content %}
     <nav class="back-links" aria-label="Page navigation">
-        <a class="back" href="{{ url_for('index') }}">Home</a>
-        <a class="back" href="{{ url_for('index', category='book') }}">← Back to your books</a>
+        <a class="back" href="{{ url_for('index') }}">← Back to Home</a>
     </nav>
     <section class="detail-heading">
         <p class="eyebrow">MAKE CINEBOOK YOUR OWN</p>
         <h1>Settings</h1>
         <p class="intro">Customize your local library.</p>
+    </section>
+    <section class="panel settings-panel" id="omdb-settings">
+        <h2>OMDb movie data</h2>
+        <p role="status">Status: <strong>{{ omdb.status }}</strong></p>
+        <p class="hint">The first fallback for movie metadata. <a href="https://www.omdbapi.com/apikey.aspx" rel="noreferrer">Get an OMDb API key</a>.</p>
+        {% if omdb.override %}
+            <p class="hint">Using OMDB_API_KEY from the server environment. Remove that variable to manage the active key here.</p>
+        {% else %}
+            <p class="hint">Stored locally in a credentials file, separate from your collection and exports. Changes take effect immediately.</p>
+            {% if omdb.saved %}<details><summary>Replace key</summary>{% endif %}
+            <form method="post" action="{{ url_for('save_omdb_settings') }}">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <input type="hidden" name="action" value="save">
+                <label for="omdb-api-key">API key</label>
+                <input id="omdb-api-key" name="api_key" type="password" autocomplete="new-password" spellcheck="false" maxlength="128" required>
+                <button type="submit" class="primary settings-save">Save and test</button>
+            </form>
+            {% if omdb.saved %}</details>{% endif %}
+        {% endif %}
+        {% if omdb.saved or omdb.override %}
+            <form method="post" action="{{ url_for('save_omdb_settings') }}">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <input type="hidden" name="action" value="test">
+                <button type="submit" class="secondary settings-save">Test connection</button>
+            </form>
+        {% endif %}
+        {% if omdb.saved %}
+            <form method="post" action="{{ url_for('save_omdb_settings') }}">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <input type="hidden" name="action" value="remove">
+                <button type="submit" class="danger settings-save">Remove key</button>
+            </form>
+        {% endif %}
+    </section>
+    <section class="panel settings-panel" id="movie-lookups">
+        <h2>Movie data lookup</h2>
+        <p>{{ movies_without_covers }} {{ 'movie has' if movies_without_covers == 1 else 'movies have' }} no saved cover image.</p>
+        <p class="hint">Run a fresh metadata lookup for these movies, then download any available posters. Lookups run in the background using your configured movie sources. Multiple matches may need your selection.</p>
+        <form method="post" action="{{ url_for('lookup_movies_without_covers') }}">
+            <input type="hidden" name="csrf" value="{{ session.csrf }}">
+            <button type="submit" class="primary settings-save" {% if not movies_without_covers %}disabled{% endif %}>Look up movies without covers</button>
+        </form>
     </section>
     {# Preference buttons submit immediately; metadata field selections use their own Save button. #}
     <section class="panel settings-panel">
@@ -67,6 +108,11 @@
                 </form>
             {% endfor %}
         </div>
+    </section>
+    <section class="panel settings-panel" aria-labelledby="settings-tags-heading">
+        <h2 id="settings-tags-heading">Tags</h2>
+        <p class="hint">Create and delete tags to organize your library.</p>
+        <a href="{{ url_for('manage_tags') }}">Manage tags →</a>
     </section>
     <section class="panel settings-panel">
         {# Field visibility changes the JSON display without removing stored or exported metadata. #}

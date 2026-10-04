@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,8 +19,14 @@ import requests
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from media import lookup_media, media_cover_options, fetch_media_description, poster_url
 from matching import candidate_key, resolve_candidates
+from balloon import KEY_PATTERNS, confirm_movie_title
+from credentials import read_credentials, update_credentials, using_credentials
+from omdb import api_key as omdb_api_key, test_api_key as test_omdb_api_key
+from cover_uploads import MAX_COVER_BYTES, validate_cover_image, cover_mimetype
 from tv import CHILD_KINDS, child_metadata, fetch_tv_children, lookup_tv_child
 from exporting import save_json_export
+from tagging import (tag_name, ensure_tag, tag_catalog, attach_tags, initialize_tags,
+                     sync_metadata_tags, replace_title_tags, suggest_from_library)
 
 
 def now():
@@ -28,6 +35,13 @@ def now():
 
 def normalize(value):
     return re.sub(r'[^\w]+', ' ', value.casefold()).strip()
+
+
+def title_initial(title):
+    # Ignore leading punctuation and fold accents; numbers and other scripts use #.
+    first = next((char for char in unicodedata.normalize('NFKD', title) if char.isalnum()), '')
+    initial = first.upper()[:1]
+    return initial if initial in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' and initial else '#'
 
 
 def connect(app):
@@ -87,6 +101,13 @@ def validate(data):
     if result['kind'] != 'book':
         status = {'Watched': 'Read', 'To Watch': 'To Be Read'}.get(status, status)
     result['reading_status'] = validate_reading_status(status)
+    if result['kind'] == 'movie':
+        result['year'] = str(data.get('year') or '').strip()
+        if result['year'] and not re.fullmatch(r'[1-9]\d{3}', result['year']):
+            raise ValueError('Year must be a four-digit year between 1000 and 9999.')
+        result['alternate_title'] = str(data.get('alternate_title') or '').strip()
+        if len(result['alternate_title']) > 500:
+            raise ValueError('Alternate Title must be at most 500 characters.')
     if result['kind'] in ('movie', 'tv'):
         result['eidr'] = validate_eidr(data.get('eidr'))
     if result['kind'] in ('tv_season', 'tv_episode'):
@@ -99,7 +120,8 @@ def validate(data):
             raise ValueError('Season and episode numbers must be between 0 and 9999.')
         result['source_key'] = str(data.get('source_key') or '')
         prefix = 'season' if result['kind'] == 'tv_season' else 'episode'
-        if result['source_key'] and not re.fullmatch('tvmaze-' + prefix + r':\d+', result['source_key']):
+        if result['source_key'] and not re.fullmatch(
+                'tvmaze-' + prefix + r':\d+|' + KEY_PATTERNS[result['kind']], result['source_key']):
             raise ValueError('Invalid TV title identifier.')
     if not result['title'] or len(result['title']) > 500:
         raise ValueError('Each title must contain 1–500 characters.')
@@ -110,6 +132,10 @@ def validate(data):
         result['isbn'] = ''
     if result['isbn'] and not re.fullmatch(r'(\d{13}|\d{9}[\dX])', result['isbn']):
         raise ValueError('ISBN must have 10 or 13 characters, with optional spaces or hyphens.')
+    if 'tags' in data:
+        if not isinstance(data['tags'], list) or len(data['tags']) > 100:
+            raise ValueError('Tags must be a list of at most 100 names.')
+        result['tags'] = list(dict.fromkeys(tag_name(name) for name in data['tags']))
     return result
 
 
@@ -119,7 +145,20 @@ def identity(book):
         suffix = book.get('source_key') or ('number:' + str(book['position']) if book.get('position') is not None else 'title:' + normalize(book['title']))
         return f"{book['kind']}:{book['parent_id']}:{suffix}"
     value = 'isbn:' + book['isbn'] if book['isbn'] else normalize(book['title']) + '|' + normalize(book['author'])
+    if book.get('kind') == 'movie' and book.get('year'):
+        value += '|' + str(book['year'])
     return value if book.get('kind', 'book') == 'book' else book['kind'] + ':' + value
+
+
+def matches_search(book, query):
+    # Include only assigned tags, alongside the title fields used by collection search.
+    values = [book['title'], book.get('display_author', book.get('author', '')), book.get('isbn', '')]
+    if book.get('kind') == 'movie':
+        values.append(book.get('alternate_title', ''))
+    if book.get('position') is not None:
+        values.append(str(book['position']))
+    values.extend(tag['name'] for tag in book.get('tags', []))
+    return not query or query.casefold() in ' '.join(values).casefold()
 
 
 def metadata_author(metadata, fallback):
@@ -239,7 +278,8 @@ def enrich_one(app):
                 return False
             metadata = app.config['LOOKUP_TV_CHILD'](dict(book), dict(parent), normalize, now)
         else:
-            metadata = app.config['LOOKUP'](dict(book))
+            with using_credentials(app.config['CREDENTIALS_FILE']):
+                metadata = app.config['LOOKUP'](dict(book))
         status = 'ambiguous' if metadata and metadata.get('candidates') else 'matched' if metadata else 'unmatched'
         error = ''
     except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
@@ -249,10 +289,12 @@ def enrich_one(app):
     # Do not overwrite an edit made while the network request was running.
     with connect(app) as db:
         saved_json = json.dumps(metadata, ensure_ascii=False) if metadata else ('{}' if status != 'failed' else book['metadata_json'])
-        updated = db.execute("UPDATE titles SET metadata_json=?, status=?, error=?, cover_status=CASE WHEN ?='failed' THEN cover_status ELSE 'pending' END, description_status=CASE WHEN ?='failed' THEN description_status ELSE 'pending' END WHERE id=? AND revision=?",
+        updated = db.execute("UPDATE titles SET metadata_json=?, status=?, error=?, cover_status=CASE WHEN ?='failed' OR cover_choice LIKE 'upload:%' THEN cover_status ELSE 'pending' END, description_status=CASE WHEN ?='failed' THEN description_status ELSE 'pending' END WHERE id=? AND revision=?",
                              (saved_json, status, error, status, status, book['id'], book['revision']))
+        if updated.rowcount and status != 'failed':
+            sync_metadata_tags(db, book['id'], metadata or {})
         if status == 'ambiguous' and updated.rowcount:
-            db.execute("UPDATE titles SET cover_status='unavailable',description_status='unavailable' WHERE id=?", (book['id'],))
+            db.execute("UPDATE titles SET cover_status=CASE WHEN cover_choice LIKE 'upload:%' THEN cover_status ELSE 'unavailable' END,description_status='unavailable' WHERE id=?", (book['id'],))
         elif metadata and updated.rowcount:
             save_metadata_author(db, book, metadata)
             if book['kind'] in ('tv_season', 'tv_episode'):
@@ -295,7 +337,8 @@ def fetch_one_description(app):
             # Initial descriptions arrive with the search; independent retries refresh the source.
             description = metadata.get('match', {}).get('description', '')
             if metadata.pop('refresh_description', False) or not description:
-                result = app.config['FETCH_MEDIA_DESCRIPTION']({**dict(book), 'match': metadata.get('match', {})})
+                with using_credentials(app.config['CREDENTIALS_FILE']):
+                    result = app.config['FETCH_MEDIA_DESCRIPTION']({**dict(book), 'match': metadata.get('match', {})})
                 if result:
                     description = result['description']
                     metadata['work'] = result
@@ -442,6 +485,7 @@ def parse_import(filename, content, default_kind='book', default_parent_id=None)
     text = content.decode('utf-8-sig')
     suffix = Path(filename).suffix.lower()
     exported = False
+    catalog_names = []
     if suffix == '.csv':
         reader = csv.DictReader(io.StringIO(text))
         if not reader.fieldnames or 'title' not in reader.fieldnames:
@@ -452,12 +496,17 @@ def parse_import(filename, content, default_kind='book', default_parent_id=None)
     elif suffix == '.json':
         value = json.loads(text)
         exported = isinstance(value, dict) and 'version' in value and 'titles' in value
+        if exported:
+            catalog_names = value.get('tags', [])
+            if not isinstance(catalog_names, list) or len(catalog_names) > 1000:
+                raise ValueError('The exported tag catalog must be a list of at most 1000 names.')
+            catalog_names = [tag_name(name) for name in catalog_names]
         rows = value.get('titles') if isinstance(value, dict) else value
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise ValueError('JSON must contain a list of book objects, or an exported titles list.')
     else:
         raise ValueError('Choose a .csv, .txt, or .json file.')
-    if not rows or len(rows) > (5000 if exported else 25):
+    if (not rows and not exported) or len(rows) > (5000 if exported else 25):
         raise ValueError('Import 1–25 books at a time.')
     validated = []
     for row in rows:
@@ -468,6 +517,8 @@ def parse_import(filename, content, default_kind='book', default_parent_id=None)
             except (KeyError, TypeError, ValueError):
                 raise ValueError('An exported title is missing its original ID.')
         validated.append(result)
+    if catalog_names and validated:
+        validated[0]['_tag_catalog'] = catalog_names
     return validated
 
 
@@ -483,6 +534,7 @@ def create_app(config=None):
                       FETCH_TV_CHILDREN=fetch_tv_children, LOOKUP_TV_CHILD=lookup_tv_child, SAVE_EXPORT=save_json_export,
                       SESSION_COOKIE_SAMESITE='Strict', SESSION_COOKIE_HTTPONLY=True)
     app.config.update(config or {})
+    app.config.setdefault('CREDENTIALS_FILE', str(Path(app.config['DATABASE']).parent / 'credentials.json'))
     Path(app.config['DATABASE']).parent.mkdir(parents=True, exist_ok=True)
     with connect(app) as db:
         db.execute('''CREATE TABLE IF NOT EXISTS titles (
@@ -506,7 +558,9 @@ def create_app(config=None):
                                    ('position', 'INTEGER'),
                                    ('source_key', "TEXT NOT NULL DEFAULT ''"),
                                    ('parent_source_key', "TEXT NOT NULL DEFAULT ''"),
-                                   ('eidr', "TEXT NOT NULL DEFAULT ''")]:
+                                   ('eidr', "TEXT NOT NULL DEFAULT ''"),
+                                   ('alternate_title', "TEXT NOT NULL DEFAULT ''"),
+                                   ('year', "TEXT NOT NULL DEFAULT ''")]:
             if column not in columns:
                 db.execute(f'ALTER TABLE titles ADD COLUMN {column} {definition}')
                 if column == 'cover_status':
@@ -527,6 +581,7 @@ def create_app(config=None):
             parent_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
             source_key TEXT NOT NULL, fetched_at TEXT NOT NULL, payload_json TEXT NOT NULL,
             PRIMARY KEY (parent_id,source_key))''')
+        initialize_tags(db)
         # Upgrade previously matched entries using their already saved metadata.
         for book in db.execute('SELECT * FROM titles').fetchall():
             save_metadata_author(db, book, json.loads(book['metadata_json']))
@@ -547,13 +602,15 @@ def create_app(config=None):
             preference = db.execute("SELECT value_json FROM settings WHERE key='default_view'").fetchone()
             theme_preference = db.execute("SELECT value_json FROM settings WHERE key='theme'").fetchone()
             scheme_preference = db.execute("SELECT value_json FROM settings WHERE key='colour_scheme'").fetchone()
+            available_tags = tag_catalog(db)
         default_view = json.loads(preference['value_json']) if preference else 'grid'
         theme = json.loads(theme_preference['value_json']) if theme_preference else 'light'
         colour_scheme = json.loads(scheme_preference['value_json']) if scheme_preference else 'forest'
         return {'categories': ALL_CATEGORIES, 'singular_categories': SINGULAR_CATEGORIES, 'title_labels': TITLE_LABELS,
                 'collection_url': collection_url, 'title_url': title_url, 'default_view': default_view, 'theme': theme,
                 'colour_scheme': colour_scheme, 'colour_schemes': COLOUR_SCHEMES,
-                'default_category': default_category(), 'collection_categories': COLLECTION_CATEGORIES}
+                'default_category': default_category(), 'collection_categories': COLLECTION_CATEGORIES,
+                'available_tags': available_tags}
 
     def cached_cover_image(identifier):
         # Browser thumbnails may arrive together; serialize downloads and reuse cached images.
@@ -571,6 +628,9 @@ def create_app(config=None):
     @app.before_request
     def local_guard():
         # Restrict accepted hosts and require the session token for every state-changing form submission.
+        if request.endpoint == 'upload_cover':
+            # Allow a 5 MB image plus multipart overhead; imports retain their 1 MB limit.
+            request.max_content_length = MAX_COVER_BYTES + 1024 * 1024
         if request.host.split(':')[0].lower() not in ('localhost', '127.0.0.1'):
             abort(403)
         if 'csrf' not in session:
@@ -596,6 +656,8 @@ def create_app(config=None):
         book['match'] = book['metadata'].get('match', {})
         book['display_author'] = book['author'] or ', '.join(book['match'].get('author_name', [])) or 'Author unknown'
         book['authors'] = book_authors(book)
+        with connect(app) as db:
+            attach_tags(db, [book])
         return book
 
     def collection_url(book, query=''):
@@ -622,7 +684,8 @@ def create_app(config=None):
 
     def sync_tv_children(parent, force=False):
         # A cached parent/provider pair is sufficient offline unless the user explicitly requests a refresh.
-        if parent['status'] != 'matched' or not re.fullmatch(r'tvmaze(?:-season)?:\d+', parent['match'].get('key', '')):
+        if parent['status'] != 'matched' or not re.fullmatch(
+                r'tvmaze(?:-season)?:\d+|' + KEY_PATTERNS[parent['kind']], parent['match'].get('key', '')):
             return 'Choose a match or finish the parent title lookup to load this collection.'
         key = parent['match']['key']
         with connect(app) as db:
@@ -655,6 +718,8 @@ def create_app(config=None):
                             VALUES (?,?,?,?,?,?,'','','',?, ?,?,'matched',?,?, 'pending')''',
                             (kind, parent['id'], match['number'], match['key'], key, match['title'], identity(child), now(),
                              json.dumps(metadata, ensure_ascii=False), match['description'], 'available' if match['description'] else 'unavailable'))
+                    saved_id = existing['id'] if existing else db.execute('SELECT last_insert_rowid()').fetchone()[0]
+                    sync_metadata_tags(db, saved_id, metadata)
                 db.execute('INSERT OR REPLACE INTO tv_collections (parent_id,source_key,fetched_at,payload_json) VALUES (?,?,?,?)',
                            (parent['id'], key, now(), json.dumps(rows, ensure_ascii=False)))
             return ''
@@ -665,13 +730,16 @@ def create_app(config=None):
         # Only display children associated with the current parent match, plus locally added children.
         error = sync_tv_children(parent)
         query = request.args.get('q', '').strip()
+        selected_tag = requested_tag()
         key = parent['match'].get('key', '')
         with connect(app) as db:
             rows = db.execute("SELECT * FROM titles WHERE parent_id=? AND (parent_source_key=? OR parent_source_key='') ORDER BY position IS NULL,position,id", (parent['id'], key)).fetchall()
         books = []
         for row in rows:
             child = get_book(row['id'])
-            if not query or query.casefold() in (child['title'] + ' ' + child['author'] + ' ' + str(child['position'] or '')).casefold():
+            if selected_tag and not any(tag['id'] == selected_tag['id'] for tag in child['tags']):
+                continue
+            if matches_search(child, query):
                 books.append(child)
         kind = CHILD_KINDS[parent['kind']]
         displayed = filtered_metadata(parent['metadata'], hidden_metadata_fields())
@@ -684,7 +752,7 @@ def create_app(config=None):
                                metadata_filtered=displayed != parent['metadata'], children_parent=parent,
                                books=books, total=len(rows), pending=sum(row['status'] == 'pending' for row in rows),
                                category=kind, category_label=ALL_CATEGORIES[kind].lower(), query=query,
-                               hierarchy_error=error, ancestors=ancestors)
+                               hierarchy_error=error, ancestors=ancestors, selected_tag=selected_tag)
 
     @app.get('/tv/<int:show_id>/seasons')
     def tv_seasons(show_id):
@@ -709,10 +777,96 @@ def create_app(config=None):
         flash(error or 'Collection refreshed. Your notes and watched statuses were kept.')
         return redirect(title_url(parent))
 
+    def requested_tag():
+        value = request.args.get('tag', '')
+        if not value:
+            return None
+        try:
+            tag_id = int(value)
+        except ValueError:
+            abort(400)
+        with connect(app) as db:
+            row = db.execute('SELECT id,name FROM tags WHERE id=?', (tag_id,)).fetchone()
+        if row is None:
+            abort(404)
+        return dict(row)
+
+    @app.get('/tags')
+    def manage_tags():
+        return render_template('tags.html')
+
+    @app.post('/tags')
+    def create_tag():
+        try:
+            name = tag_name(request.form.get('name', ''))
+            with connect(app) as db:
+                exists = db.execute('SELECT 1 FROM tags WHERE name_key=?', (name.casefold(),)).fetchone()
+                ensure_tag(db, name)
+            flash('That tag already exists.' if exists else f'Tag created: {name}.')
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for('manage_tags'))
+
+    @app.post('/tags/<int:tag_id>/delete')
+    def delete_tag(tag_id):
+        with connect(app) as db:
+            row = db.execute('SELECT name FROM tags WHERE id=?', (tag_id,)).fetchone()
+            if row is None:
+                abort(404)
+            db.execute('DELETE FROM tags WHERE id=?', (tag_id,))
+        flash(f"Tag deleted: {row['name']}. Titles remain in your library.")
+        return redirect(url_for('manage_tags'))
+
+    @app.post('/tags/suggest')
+    def suggest_tags():
+        with connect(app) as db:
+            added = suggest_from_library(db)
+        flash(f'Automatic tagging complete. Applied tags from saved metadata and added {added} new '
+              f'{"tag" if added == 1 else "tags"}. Your tag selections were kept.')
+        return redirect(url_for('manage_tags'))
+
+    @app.post('/books/<int:book_id>/tags')
+    def save_title_tags(book_id):
+        get_book(book_id)
+        try:
+            ids = [int(value) for value in request.form.getlist('tag_id')]
+            name = request.form.get('new_tag', '').strip()
+            with connect(app) as db:
+                # Validate submitted IDs before creating a tag so stale forms do not partially save.
+                available = {row['id'] for row in db.execute('SELECT id FROM tags')}
+                if not set(ids).issubset(available) or len(set(ids)) > 100:
+                    raise ValueError('A selected tag is invalid. Reload the page and try again.')
+                if name:
+                    ids.append(ensure_tag(db, name))
+                replace_title_tags(db, book_id, ids)
+            flash('Tags saved.')
+        except ValueError as exc:
+            flash(str(exc))
+        return redirect(url_for('detail', book_id=book_id))
+
     def hidden_metadata_fields():
         with connect(app) as db:
             row = db.execute("SELECT value_json FROM settings WHERE key='hidden_metadata_fields'").fetchone()
         return set(json.loads(row['value_json'])) if row else set()
+
+    missing_movie_cover = """kind='movie' AND NOT EXISTS (
+        SELECT 1 FROM covers WHERE identifier=titles.cover_key AND length(image)>0)"""
+
+    @app.post('/settings/movies/lookup-missing-covers')
+    def lookup_movies_without_covers():
+        # Queue fresh metadata; the existing worker then fetches descriptions and artwork.
+        with connect(app) as db:
+            missing = db.execute('SELECT COUNT(*) FROM titles WHERE ' + missing_movie_cover).fetchone()[0]
+            queued = db.execute("""UPDATE titles SET status='pending',match_choice='',error='',
+                cover_status='pending',cover_error='',description_status='pending',description_error='',
+                revision=revision+1 WHERE """ + missing_movie_cover + " AND status!='pending'").rowcount
+        if queued:
+            flash(f'Metadata lookup queued for {queued} ' + ('movie' if queued == 1 else 'movies') + ' without cover images.')
+        elif missing:
+            flash('All movies without cover images are already queued.')
+        else:
+            flash('Every movie already has a cover image.')
+        return redirect(url_for('settings', _anchor='movie-lookups'))
 
     @app.get('/settings')
     def settings():
@@ -721,6 +875,7 @@ def create_app(config=None):
         paths = {tuple(json.loads(token)) for token in hidden}
         with connect(app) as db:
             rows = db.execute('SELECT metadata_json FROM titles').fetchall()
+            missing_covers = db.execute('SELECT COUNT(*) FROM titles WHERE ' + missing_movie_cover).fetchone()[0]
         for row in rows:
             paths.update(metadata_field_paths(json.loads(row['metadata_json'])))
         groups = {}
@@ -728,7 +883,59 @@ def create_app(config=None):
             token = field_token(path)
             group = path[0]
             groups.setdefault(group, []).append({'token': token, 'label': field_label(path), 'visible': token not in hidden})
-        return render_template('settings.html', groups=groups, field_count=len(paths))
+        return render_template('settings.html', groups=groups, field_count=len(paths), omdb=omdb_settings(),
+                               movies_without_covers=missing_covers)
+
+    def omdb_settings():
+        try:
+            saved = read_credentials(app.config['CREDENTIALS_FILE'])
+        except (OSError, ValueError):
+            return {'status': 'Unavailable', 'saved': False, 'override': False}
+        override = os.environ.get('OMDB_API_KEY', '').strip()
+        configured = bool(saved.get('omdb_api_key'))
+        status = saved.get('omdb_status', 'Not tested') if configured else 'Not configured'
+        if override:
+            fingerprint = hashlib.sha256(override.encode()).hexdigest()
+            tested = saved.get('omdb_environment_status', {})
+            status = tested.get('status', 'Not tested') if tested.get('key_hash') == fingerprint else 'Not tested'
+        return {'status': status, 'saved': configured, 'override': bool(override)}
+
+    @app.post('/settings/omdb')
+    def save_omdb_settings():
+        action = request.form.get('action')
+        path = app.config['CREDENTIALS_FILE']
+        override = os.environ.get('OMDB_API_KEY', '').strip()
+        try:
+            if action == 'remove':
+                update_credentials(path, {}, remove=('omdb_api_key', 'omdb_status'))
+                flash('Saved OMDb key removed.' + (' The environment override remains active.' if override else ''))
+            elif action in ('save', 'test'):
+                if action == 'save':
+                    if override:
+                        flash('OMDB_API_KEY overrides the saved key. Remove that environment variable to replace the key here.')
+                        return redirect(url_for('settings'))
+                    key = request.form.get('api_key', '').strip()
+                    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', key):
+                        flash('Enter a valid OMDb API key.')
+                        return redirect(url_for('settings'))
+                else:
+                    with using_credentials(path):
+                        key = omdb_api_key()
+                    if not key:
+                        flash('OMDb is not configured. Enter an API key first.')
+                        return redirect(url_for('settings'))
+                status = test_omdb_api_key(key)
+                if override:
+                    update_credentials(path, {'omdb_environment_status': {
+                        'key_hash': hashlib.sha256(key.encode()).hexdigest(), 'status': status}})
+                else:
+                    update_credentials(path, {'omdb_api_key': key, 'omdb_status': status})
+                flash('OMDb: ' + status + '. Changes take effect immediately.')
+            else:
+                abort(400)
+        except (OSError, ValueError):
+            flash('Could not update OMDb settings. Check access to the local credentials file.')
+        return redirect(url_for('settings'))
 
     @app.post('/settings')
     def save_settings():
@@ -796,6 +1003,9 @@ def create_app(config=None):
         mapped_ids = {}
         remaining = list(rows)
         with connect(app) as db:
+            for book in rows:
+                for name in book.get('_tag_catalog', []) + book.get('tags', []):
+                    ensure_tag(db, name)
             while remaining:
                 progress = False
                 for original in list(remaining):
@@ -820,11 +1030,16 @@ def create_app(config=None):
                     if duplicate:
                         saved_id = duplicate['id']
                     else:
-                        cursor = db.execute('INSERT OR IGNORE INTO titles (title,author,isbn,notes,identity,added_at,reading_status,kind,parent_id,position,source_key,parent_source_key,eidr) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        cursor = db.execute('INSERT OR IGNORE INTO titles (title,author,isbn,notes,identity,added_at,reading_status,kind,parent_id,position,source_key,parent_source_key,eidr,alternate_title,year) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                             (book['title'], book['author'], book['isbn'], book['notes'], identity(book), now(), book['reading_status'], book['kind'],
-                                             book.get('parent_id'), book.get('position'), book.get('source_key', ''), parent_key, book.get('eidr', '')))
+                                             book.get('parent_id'), book.get('position'), book.get('source_key', ''), parent_key, book.get('eidr', ''), book.get('alternate_title', ''), book.get('year', '')))
                         added += cursor.rowcount
                         saved_id = cursor.lastrowid if cursor.rowcount else db.execute('SELECT id FROM titles WHERE identity=?', (identity(book),)).fetchone()['id']
+                    if 'tags' in book:
+                        # Duplicate imports can restore/merge explicit tags without overwriting other title data.
+                        current = [row['tag_id'] for row in db.execute(
+                            'SELECT tag_id FROM title_tags WHERE title_id=? AND enabled=1', (saved_id,))]
+                        replace_title_tags(db, saved_id, current + [ensure_tag(db, name) for name in book['tags']])
                     if '_import_id' in book:
                         mapped_ids[book['_import_id']] = saved_id
                     remaining.remove(original)
@@ -833,10 +1048,46 @@ def create_app(config=None):
                     raise ValueError('The export has an invalid or circular TV hierarchy.')
         return added
 
+    @app.get('/search-suggestions')
+    def search_suggestions():
+        query = request.args.get('q', '').strip().casefold()
+        category = request.args.get('category', default_category())
+        if category not in ALL_CATEGORIES:
+            abort(400)
+        with connect(app) as db:
+            if category in ('tv_season', 'tv_episode'):
+                try:
+                    parent_id = int(request.args.get('parent_id', ''))
+                    parent = tv_parent(parent_id, category)
+                except ValueError:
+                    abort(400)
+                key = parent['match'].get('key', '')
+                rows = db.execute("""SELECT id,title,alternate_title FROM titles WHERE kind=? AND parent_id=?
+                    AND (parent_source_key=? OR parent_source_key='')""", (category, parent_id, key)).fetchall()
+            else:
+                rows = db.execute('SELECT id,title,alternate_title FROM titles WHERE kind=?', (category,)).fetchall()
+            books = [dict(row) for row in rows]
+            attach_tags(db, books)
+        if not query:
+            return {'suggestions': []}
+        terms = {}
+        for book in books:
+            for name, label in [(book['title'], 'Title'), (book['alternate_title'], 'Title')] + [
+                    (tag['name'], 'Tag') for tag in book['tags']]:
+                if name and query in name.casefold():
+                    terms.setdefault((name.casefold(), label), {'value': name, 'label': label})
+        suggestions = sorted(terms.values(), key=lambda term: (
+            not term['value'].casefold().startswith(query), term['value'].casefold(), term['label']))
+        return {'suggestions': suggestions[:10]}
+
     @app.get('/')
     def index():
         # Search only the selected category; counts describe the full collection before search filtering.
         query = request.args.get('q', '').strip()
+        selected_letter = request.args.get('letter', '').upper()
+        if selected_letter not in ('', '#', *'ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            abort(400)
+        selected_tag = requested_tag()
         category = request.args.get('category', default_category())
         if category not in COLLECTION_CATEGORIES:
             abort(400)
@@ -850,9 +1101,16 @@ def create_app(config=None):
             book['match'] = json.loads(book['metadata_json']).get('match', {})
             book['display_author'] = book['author'] or ', '.join(book['match'].get('author_name', [])) or 'Author unknown'
             book['authors'] = book_authors(book)
-            if not query or query.casefold() in (book['title'] + ' ' + book['display_author'] + ' ' + book['isbn']).casefold():
-                books.append(book)
-        return render_template('index.html', books=books, total=len(rows), pending=pending, query=query,
+            books.append(book)
+        with connect(app) as db:
+            attach_tags(db, books)
+        books = [book for book in books if matches_search(book, query)]
+        if selected_letter:
+            books = [book for book in books if title_initial(book['title']) == selected_letter]
+        if selected_tag:
+            books = [book for book in books if any(tag['id'] == selected_tag['id'] for tag in book['tags'])]
+        return render_template('index.html', books=books, selected_tag=selected_tag, selected_letter=selected_letter,
+                               total=len(rows), pending=pending, query=query,
                                category=category, categories=COLLECTION_CATEGORIES, category_counts=counts,
                                category_label='TV shows' if category == 'tv' else COLLECTION_CATEGORIES[category].lower())
 
@@ -871,6 +1129,8 @@ def create_app(config=None):
             if any(normalize(author) == normalize(name) for author in book_authors(book)):
                 book['display_author'] = book['author'] or ', '.join(book_authors(book)) or 'Author unknown'
                 local_books.append(book)
+        with connect(app) as db:
+            attach_tags(db, local_books)
         return render_template('author.html', name=name, local_books=local_books)
 
     @app.post('/books')
@@ -879,12 +1139,16 @@ def create_app(config=None):
         destination = url_for('index', category=category if category in COLLECTION_CATEGORIES else 'tv')
         try:
             book = validate(request.form)
+            imdb_link = request.form.get('imdb_link', '').strip()
+            if category == 'movie' and imdb_link:
+                confirm_movie_title(imdb_link, book['title'], normalize)
             if category in ('tv_season', 'tv_episode'):
                 tv_parent(book['parent_id'], category)
                 destination = collection_url(book)
             added = insert_books([book])
             label = SINGULAR_CATEGORIES[category]
-            flash(f'{TITLE_LABELS[category]} added. Metadata lookup queued.' if added else f'That {label} is already in your library.')
+            message = f'{TITLE_LABELS[category]} added. Metadata lookup queued.' if added else f'That {label} is already in your library.'
+            flash('IMDb title confirmed. ' + message if category == 'movie' and imdb_link else message)
         except ValueError as exc:
             flash(str(exc))
         return redirect(destination)
@@ -902,8 +1166,14 @@ def create_app(config=None):
             if category in ('tv_season', 'tv_episode'):
                 parent = tv_parent(parent_id, category)
                 destination = title_url(parent)
-            rows = parse_import(upload.filename, upload.read(), category, parent_id)
+            content = upload.read()
+            rows = parse_import(upload.filename, content, category, parent_id)
             added = insert_books(rows)
+            if not rows:
+                # An empty-library export can still contain unused custom tags.
+                with connect(app) as db:
+                    for name in json.loads(content.decode('utf-8-sig')).get('tags', []):
+                        ensure_tag(db, name)
             flash(f'Imported {added} titles; skipped {len(rows) - added} duplicates. Metadata lookup queued.')
         except (ValueError, UnicodeError, csv.Error) as exc:
             flash(str(exc))
@@ -984,9 +1254,13 @@ def create_app(config=None):
             metadata = candidates[choice]
             if 'response' not in metadata and stored.get('response') is not None:
                 metadata['response'] = stored['response']
-            db.execute("UPDATE titles SET metadata_json=?,match_choice=?,status='matched',error='',cover_key='',cover_choice='',cover_status='pending',cover_error='',description='',description_status='pending',description_error='',revision=revision+1 WHERE id=?",
-                       (json.dumps(metadata, ensure_ascii=False), candidate_key(metadata), book_id))
+            uploaded = book['cover_choice'].startswith('upload:')
+            db.execute("UPDATE titles SET metadata_json=?,match_choice=?,status='matched',error='',cover_key=?,cover_choice=?,cover_status=?,cover_error='',description='',description_status='pending',description_error='',revision=revision+1 WHERE id=?",
+                       (json.dumps(metadata, ensure_ascii=False), candidate_key(metadata),
+                        book['cover_key'] if uploaded else '', book['cover_choice'] if uploaded else '',
+                        book['cover_status'] if uploaded else 'pending', book_id))
             save_metadata_author(db, {**book, 'revision': revision + 1}, metadata)
+            sync_metadata_tags(db, book_id, metadata)
             if book['kind'] in ('tv_season', 'tv_episode'):
                 db.execute('UPDATE titles SET source_key=? WHERE id=?', (metadata['match'].get('key', ''), book_id))
         return {'message': 'Title selected. Description and cover lookup queued.'}
@@ -1004,10 +1278,20 @@ def create_app(config=None):
         except ValueError as exc:
             flash(str(exc))
         if request.form.get('location') == 'library':
-            if book['kind'] in ('tv_season', 'tv_episode'):
-                return redirect(collection_url(book, request.form.get('q', '')))
             args = {'q': request.form.get('q', '')}
-            if book['kind'] != 'book':
+            letter = request.form.get('letter', '').upper()
+            if book['kind'] in COLLECTION_CATEGORIES and letter in ('#', *'ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+                args['letter'] = letter
+            tag_id = request.form.get('tag', type=int)
+            if tag_id:
+                with connect(app) as db:
+                    if db.execute('SELECT 1 FROM tags WHERE id=?', (tag_id,)).fetchone():
+                        args['tag'] = tag_id
+            if book['kind'] == 'tv_season':
+                return redirect(url_for('tv_seasons', show_id=book['parent_id'], **args))
+            if book['kind'] == 'tv_episode':
+                return redirect(url_for('tv_episodes', season_id=book['parent_id'], **args))
+            if book['kind'] != 'book' or 'letter' in args:
                 args['category'] = book['kind']
             return redirect(url_for('index', **args))
         return redirect(url_for('detail', book_id=book_id))
@@ -1020,7 +1304,7 @@ def create_app(config=None):
             cached = db.execute('SELECT image FROM covers WHERE identifier=?', (book['cover_key'],)).fetchone()
         if cached is None:
             abort(404)
-        response = app.response_class(cached['image'], mimetype='image/png' if cached['image'].startswith(b'\x89PNG') else 'image/jpeg')
+        response = app.response_class(cached['image'], mimetype=cover_mimetype(cached['image']))
         response.set_etag(hashlib.sha256(cached['image']).hexdigest())
         response.headers['Cache-Control'] = 'private, max-age=0, must-revalidate'
         return response.make_conditional(request)
@@ -1029,7 +1313,9 @@ def create_app(config=None):
         # The cache marker distinguishes media artwork from explicitly English book editions.
         work_key = book['match'].get('key', '')
         media = book['kind'] != 'book'
-        if not isinstance(work_key, str) or not re.fullmatch(r'(itunes|tvmaze|tvmaze-season|tvmaze-episode|wikipedia):\d+' if media else r'/works/OL\d+W', work_key):
+        if not isinstance(work_key, str) or not re.fullmatch(
+                r'(itunes|tvmaze|tvmaze-season|tvmaze-episode|wikipedia):\d+|omdb:tt\d+|' + KEY_PATTERNS[book['kind']]
+                if media else r'/works/OL\d+W', work_key):
             return {'options': [], 'next_offset': None}
         with connect(app) as db:
             row = db.execute('SELECT payload FROM cover_options WHERE work_key=? AND offset=?', (work_key, offset)).fetchone()
@@ -1118,6 +1404,38 @@ def create_app(config=None):
                        (identifier,identifier,json.dumps(metadata,ensure_ascii=False),book_id))
         return {'image_url': url_for('cover', book_id=book_id, v=cover_id)}
 
+    @app.post('/books/<int:book_id>/cover/upload')
+    def upload_cover(book_id):
+        book = get_book(book_id)
+        upload = request.files.get('cover_file')
+        try:
+            revision = int(request.form.get('revision', ''))
+            if revision != book['revision']:
+                flash('This title changed. Reload the page before adding a cover.')
+                return redirect(url_for('detail', book_id=book_id))
+            if upload is None or not upload.filename:
+                raise ValueError('Choose a JPEG, PNG, or WebP image.')
+            image = validate_cover_image(upload.read(MAX_COVER_BYTES + 1))
+        except ValueError as exc:
+            flash(str(exc) if upload is not None else 'Choose a JPEG, PNG, or WebP image.')
+            return redirect(url_for('detail', book_id=book_id))
+        identifier = 'upload:' + hashlib.sha256(image).hexdigest()
+        with connect(app) as db:
+            db.execute('BEGIN IMMEDIATE')
+            current = db.execute('SELECT * FROM titles WHERE id=?', (book_id,)).fetchone()
+            if current is None:
+                abort(404)
+            if current['revision'] != revision:
+                flash('This title changed. Reload the page before adding a cover.')
+                return redirect(url_for('detail', book_id=book_id))
+            metadata = json.loads(current['metadata_json'])
+            metadata.pop('cover_selection', None)
+            db.execute('INSERT OR IGNORE INTO covers (identifier,image,fetched_at) VALUES (?,?,?)', (identifier, image, now()))
+            db.execute("UPDATE titles SET cover_choice=?,cover_key=?,cover_status='available',cover_error='',metadata_json=?,revision=revision+1 WHERE id=?",
+                       (identifier, identifier, json.dumps(metadata, ensure_ascii=False), book_id))
+        flash('Cover added and saved locally.')
+        return redirect(url_for('detail', book_id=book_id))
+
     @app.post('/books/<int:book_id>/cover/retry')
     def retry_cover(book_id):
         get_book(book_id)
@@ -1149,20 +1467,30 @@ def create_app(config=None):
                 book['reading_status'] = old['reading_status']
             if 'eidr' not in request.form and old['kind'] in ('movie', 'tv'):
                 book['eidr'] = old['eidr']
+            if old['kind'] == 'movie' and 'alternate_title' not in request.form:
+                book['alternate_title'] = old['alternate_title']
+            if old['kind'] == 'movie' and 'year' not in request.form:
+                book['year'] = old['year']
             changed = any(book[key] != old[key] for key in ('title', 'author', 'isbn'))
+            year_changed = old['kind'] == 'movie' and book['year'] != old['year']
+            lookup_changed = changed or year_changed
             child = old['kind'] in ('tv_season', 'tv_episode')
             with connect(app) as db:
                 db.execute('UPDATE titles SET title=?,author=?,isbn=?,notes=?,identity=?,reading_status=?,revision=revision+1, status=?,metadata_json=?,error=? WHERE id=?',
                            (book['title'], book['author'], book['isbn'], book['notes'], identity(book), book['reading_status'],
-                            'pending' if changed else old['status'], '{}' if changed and not child else old['metadata_json'],
-                            '' if changed else old['error'], book_id))
+                            'pending' if lookup_changed else old['status'], '{}' if lookup_changed and not child else old['metadata_json'],
+                            '' if lookup_changed else old['error'], book_id))
                 if old['kind'] in ('movie', 'tv'):
                     db.execute('UPDATE titles SET eidr=? WHERE id=?', (book['eidr'], book_id))
-                if changed:
+                if old['kind'] == 'movie':
+                    db.execute('UPDATE titles SET alternate_title=?,year=? WHERE id=?', (book['alternate_title'], book['year'], book_id))
+                if lookup_changed:
+                    sync_metadata_tags(db, book_id, {})
                     db.execute("UPDATE titles SET match_choice='' WHERE id=?", (book_id,))
-                    db.execute("UPDATE titles SET cover_key='',cover_choice='',cover_status='pending',cover_error='' WHERE id=?", (book_id,))
                     db.execute("UPDATE titles SET description='',description_status='pending',description_error='' WHERE id=?", (book_id,))
-            flash(f"{TITLE_LABELS[old['kind']]} saved." + (' Metadata lookup queued.' if changed else ''))
+                if changed:
+                    db.execute("UPDATE titles SET cover_key='',cover_choice='',cover_status='pending',cover_error='' WHERE id=?", (book_id,))
+            flash(f"{TITLE_LABELS[old['kind']]} saved." + (' Metadata lookup queued.' if lookup_changed else ''))
         except (ValueError, sqlite3.IntegrityError) as exc:
             flash(str(exc) if isinstance(exc, ValueError) else 'Another book already has those details.')
         return redirect(url_for('detail', book_id=book_id))
@@ -1189,9 +1517,12 @@ def create_app(config=None):
         # Export complete stored metadata regardless of the fields hidden in the details-page display.
         with connect(app) as db:
             titles = [dict(row) for row in db.execute('SELECT * FROM titles ORDER BY id')]
+            attach_tags(db, titles)
+            names = [tag['name'] for tag in tag_catalog(db)]
         for title in titles:
             title['metadata'] = json.loads(title.pop('metadata_json'))
-        return json.dumps({'version': 1, 'exported_at': now(), 'titles': titles}, indent=2, ensure_ascii=False)
+            title['tags'] = [tag['name'] for tag in title['tags']]
+        return json.dumps({'version': 1, 'exported_at': now(), 'tags': names, 'titles': titles}, indent=2, ensure_ascii=False)
 
     @app.get('/export')
     def export():

@@ -7,6 +7,7 @@ import requests
 
 from media import plain_text, poster_url
 from matching import resolve_candidates
+from balloon import fetch_children as balloon_children, get_json as balloon_json, detail_path, key_parts, child_row
 
 # These mappings define the valid parent-child pairs and provider identifiers at each level.
 CHILD_KINDS = {'tv': 'tv_season', 'tv_season': 'tv_episode'}
@@ -23,6 +24,8 @@ def tv_id(kind, key):
 
 def fetch_tv_children(kind, key):
     # Fetch only the immediate children: seasons of a show or episodes of a season.
+    if key.startswith('balloon-'):
+        return balloon_children(kind, key)
     identifier = tv_id(kind, key)
     path = f'shows/{identifier}/seasons' if kind == 'tv' else f'seasons/{identifier}/episodes'
     response = requests.get('https://api.tvmaze.com/' + path, timeout=(4, 8))
@@ -44,7 +47,7 @@ def child_metadata(kind, row, parent, now):
     fallback = inherited.removeprefix('poster:') if inherited.startswith('poster:') else parent_match.get('poster_url', '')
     url = image or fallback
     date = row.get('premiereDate') if kind == 'tv_season' else row.get('airdate')
-    match = {'key': KEY_PREFIXES[kind] + ':' + str(int(row['id'])), 'title': title,
+    match = {'key': row['_provider_key'] if row.get('_provider_key') else KEY_PREFIXES[kind] + ':' + str(int(row['id'])), 'title': title,
              'number': number, 'airdate': date or '', 'first_publish_year': (date or '')[:4],
              'author_name': [], 'subject': parent_match.get('subject', []),
              'description': plain_text(row.get('summary')), 'poster_url': url,
@@ -55,12 +58,18 @@ def child_metadata(kind, row, parent, now):
             poster_url(candidate)
             options.append({'cover_id': len(options) + 1, 'title': title, 'publish_date': match['first_publish_year'],
                             'publishers': [], 'poster_url': candidate})
-    return {'provider': 'TVmaze', 'fetched_at': now(), 'match': match, 'response': row, 'poster_options': options}
+    return {'provider': row.get('_provider', 'TVmaze'), 'fetched_at': now(), 'match': match,
+            'response': row.get('_response', row), 'poster_options': options}
 
 
 def lookup_tv_child(item, parent, normalize, now):
     # A known provider ID resolves directly; new local children match by number or normalized title.
     if item['source_key']:
+        if item['source_key'].startswith('balloon-'):
+            parts = key_parts(item['kind'], item['source_key'])
+            row = balloon_json(detail_path(item['kind'], item['source_key']))
+            return child_metadata(item['kind'], child_row(row, item['source_key'], int(parts[-1]),
+                                  item['kind'] == 'tv_season'), parent, now)
         identifier = tv_id(item['kind'], item['source_key'])
         resource = 'seasons' if item['kind'] == 'tv_season' else 'episodes'
         response = requests.get(f'https://api.tvmaze.com/{resource}/{identifier}', timeout=(4, 8))

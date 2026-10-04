@@ -5,7 +5,10 @@ import re
 from urllib.parse import urlsplit, quote
 
 import requests
-from matching import resolve_candidates
+from matching import resolve_candidates, matches_movie_year
+from tagging import wikipedia_film_subjects
+from balloon import lookup_balloon, get_json as balloon_json, detail_path, description as balloon_description, PROVIDER
+from omdb import lookup_omdb, movie_detail as omdb_detail, text_field as omdb_text
 
 
 def poster_url(value):
@@ -15,7 +18,7 @@ def poster_url(value):
     parsed = urlsplit(value)
     host = parsed.hostname or ''
     if (parsed.scheme != 'https' or parsed.username or parsed.password or parsed.port not in (None, 443)
-            or not (host in ('static.tvmaze.com', 'upload.wikimedia.org') or host.endswith('.mzstatic.com'))):
+            or not (host in ('static.tvmaze.com', 'upload.wikimedia.org', 'm.media-amazon.com') or host.endswith('.mzstatic.com'))):
         raise ValueError('Invalid poster host')
     return value
 
@@ -27,7 +30,14 @@ def plain_text(value):
 
 def lookup_media(item, normalize, now):
     # Adapt movie and TV results to the same match structure used by book metadata.
+    choice = item.get('match_choice', '')
+    primary = lookup_balloon(item, normalize, now) if not choice or choice.startswith('balloon-') else None
+    if primary:
+        return primary
     if item['kind'] == 'movie':
+        fallback = lookup_omdb(item, normalize, now, poster_url) if not choice or choice.startswith('omdb:') else None
+        if fallback:
+            return fallback
         response = requests.get('https://itunes.apple.com/search',
                                 params={'term': item['title'], 'entity': 'movie', 'media': 'movie', 'limit': 50, 'country': 'CA'},
                                 timeout=(4, 8))
@@ -38,6 +48,7 @@ def lookup_media(item, normalize, now):
         matches = [row for row in payload['results'] if isinstance(row, dict)
                    and row.get('kind') == 'feature-movie'
                    and normalize(row.get('trackName', '')) == normalize(item['title'])
+                   and matches_movie_year(item, row.get('releaseDate'))
                    and (not item['author'] or normalize(item['author']) == normalize(row.get('artistName', '')))]
         # Keep exact-match rules when falling back to another movie source.
         if not matches:
@@ -92,17 +103,27 @@ def lookup_movie_wikipedia(item, normalize, now):
         description = page.get('extract', '').strip()
         # Require a film article for the exact title, rather than soundtracks or related films.
         bare_title = re.sub(r' \((?:\d{4} )?film\)$', '', title)
-        if normalize(bare_title) != normalize(item['title']) or not re.search(r'\bfilm\b', description[:300]):
+        intro = description.split('\n', 1)[0]
+        identity = re.split(r'\bdirected by\b', intro, maxsplit=1, flags=re.IGNORECASE)[0]
+        medium = re.split(r'\b(?:film|movie)\b', identity, maxsplit=1, flags=re.IGNORECASE)[0]
+        other_media = re.search(r'\b(?:television|TV|series|sitcom|song|soundtrack|album|novel|book|video game)\b', medium, re.IGNORECASE)
+        film_intro = re.search(r'\b(?:film|movie)\b', identity, re.IGNORECASE) or (
+            re.search(r'\bdirected by\b', intro, re.IGNORECASE)
+            and re.search(r'\b(?:comedy|drama|thriller|horror|documentary|animation|animated|romance|action|adventure)\b', identity, re.IGNORECASE))
+        if normalize(bare_title) != normalize(item['title']) or other_media or not film_intro:
             continue
-        director = re.search(r'directed by ([^.\n]+?)(?: and |,|\.|\n)', description)
+        director = re.search(r'directed by ([^.\n]+?)(?: \(| in (?:his|her|their) (?:feature )?directorial debut| and | from a screenplay|,|\.|\n|$)', intro, re.IGNORECASE)
         author = director.group(1).strip() if director else ''
         if item['author'] and normalize(item['author']) != normalize(author):
             continue
-        year = re.search(r'\b(?:19|20)\d{2}\b', description[:200])
+        year = re.search(r'\bis (?:a|an) ([1-9]\d{3})\b', intro, re.IGNORECASE)
+        year_value = year.group(1) if year else ''
+        if not matches_movie_year(item, year_value):
+            continue
         url = page.get('original', {}).get('source', '')
         match = {'key': f"wikipedia:{int(page['pageid'])}", 'title': bare_title,
-                 'author_name': [author] if author else [], 'first_publish_year': year.group() if year else '',
-                 'subject': [], 'description': description, 'poster_url': url,
+                 'author_name': [author] if author else [], 'first_publish_year': year_value,
+                 'subject': wikipedia_film_subjects(description), 'description': description, 'poster_url': url,
                  'source_url': 'https://en.wikipedia.org/wiki/' + quote(title.replace(' ', '_'))}
         options = [{'cover_id': int(page['pageid']), 'title': bare_title, 'publish_date': match['first_publish_year'],
                     'publishers': [author] if author else [], 'poster_url': poster_url(url)}] if url else []
@@ -112,7 +133,19 @@ def lookup_movie_wikipedia(item, normalize, now):
 
 def media_cover_options(book, offset):
     # Movies and TV children reuse stored options; shows retrieve original poster candidates from TVmaze.
-    if book['kind'] in ('movie', 'tv_season', 'tv_episode'):
+    key = book['match'].get('key', '')
+    if key.startswith('balloon-'):
+        options = list(book['metadata'].get('poster_options', []))
+        if book['kind'] in ('movie', 'tv'):
+            payload = balloon_json(detail_path(book['kind'], key) + '/images')
+            posters = payload.get('posters')
+            if not isinstance(posters, list):
+                raise ValueError('Invalid Balloonerismm images response.')
+            urls = list(dict.fromkeys([option['poster_url'] for option in options] +
+                                     [row['file_path'] for row in posters if isinstance(row, dict) and row.get('file_path')]))
+            options = [{'cover_id': index, 'title': book['title'], 'publish_date': book['match'].get('first_publish_year', ''),
+                        'publishers': [], 'poster_url': poster_url(url)} for index, url in enumerate(urls, start=1)]
+    elif book['kind'] in ('movie', 'tv_season', 'tv_episode'):
         options = book['metadata'].get('poster_options', [])
     else:
         key = book['match'].get('key', '')
@@ -135,6 +168,12 @@ def media_cover_options(book, offset):
 def fetch_media_description(item):
     # Refresh a selected provider record directly instead of repeating an ambiguous title search.
     key = item['match'].get('key', '')
+    if key.startswith('balloon-'):
+        payload = balloon_json(detail_path(item['kind'], key))
+        return {'description': balloon_description(payload), 'response': payload, 'provider': PROVIDER}
+    if re.fullmatch(r'omdb:tt\d+', key):
+        payload = omdb_detail(key.split(':', 1)[1])
+        return {'description': omdb_text(payload, 'Plot'), 'response': payload, 'provider': 'OMDb'}
     if not re.fullmatch(r'(itunes|tvmaze|tvmaze-season|tvmaze-episode|wikipedia):\d+', key):
         return None
     provider, identifier = key.split(':')

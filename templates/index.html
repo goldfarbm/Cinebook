@@ -14,10 +14,10 @@
             <span class="art-label">Collected by you.</span>
         </div>
     </section>
-    {# Category links retain the current search and show each collection’s saved title count. #}
+    {# Category links start each collection with a cleared search and filters. #}
     <nav class="category-nav" aria-label="Collection category">
         {% for key, label in categories.items() %}
-            <a href="{{ url_for('index', category=key, q=query) }}" {% if category == key %}aria-current="page"{% endif %}>{{ label }} <span class="category-count">{{ category_counts.get(key, 0) }}</span></a>
+            <a href="{{ url_for('index', category=key) }}" {% if category == key %}aria-current="page"{% endif %}>{{ label }} <span class="category-count">{{ category_counts.get(key, 0) }}</span></a>
         {% endfor %}
     </nav>
     {# The same collection workspace is also used for TV seasons and episodes. #}

@@ -43,6 +43,7 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(specific['match']['key'], '/works/OL1W')
 
     @patch('media.requests.get')
+    @patch('media.lookup_balloon', new=lambda *args: None)
     def test_movies_and_tv_collect_all_same_name_matches(self, get):
         get.return_value.json.return_value = {'results': [
             {'kind': 'feature-movie', 'trackId': 1, 'trackName': 'Shared name', 'artistName': 'One', 'releaseDate': '1990'},
@@ -144,6 +145,7 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(self.row()['metadata_json'], '{}')
 
     @patch('media.requests.get')
+    @patch('media.lookup_balloon', new=lambda *args: None)
     def test_wikipedia_remakes_are_ambiguous(self, get):
         apple = Mock()
         apple.json.return_value = {'results': []}

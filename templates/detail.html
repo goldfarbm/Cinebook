@@ -24,6 +24,7 @@
         <p class="eyebrow">IN YOUR COLLECTION</p>
         <h1>{{ page_heading | default(book.title) }}</h1>
         <p class="intro">{% include 'author_links.html' %}</p>
+        {% include 'tag_chips.html' %}
         {% include 'match_choice.html' %}
         {% if children_parent is not defined and book.kind in ['tv', 'tv_season'] %}
             <p><a class="browse-children" href="{{ title_url(book) }}">Browse {{ 'seasons' if book.kind == 'tv' else 'episodes' }} →</a></p>
@@ -53,7 +54,7 @@
                 {% set enable_cover_picker = true %}
                 {% include 'cover.html' %}
             </div>
-            <p class="hint">{% if book.status == 'ambiguous' %}Choose a title to fetch its cover.{% else %}{{ {'pending':'Cover lookup queued…','available':'Cover saved locally','unavailable':'No cover available','failed':'Cover lookup failed'}[book.cover_status] }}{% endif %}</p>
+            <p class="hint">{% if book.cover_choice.startswith('upload:') %}Your added cover is saved locally.{% elif book.status == 'ambiguous' %}Choose a title to fetch its cover.{% else %}{{ {'pending':'Cover lookup queued…','available':'Cover saved locally','unavailable':'No cover available','failed':'Cover lookup failed'}[book.cover_status] }}{% endif %}</p>
             {% if book.cover_error %}
                 <p class="hint">{{ book.cover_error }}</p>
             {% endif %}
@@ -63,6 +64,15 @@
                     <button type="submit" class="secondary">Retry cover lookup</button>
                 </form>
             {% endif %}
+            <form id="add-cover-form" method="post" action="{{ url_for('upload_cover', book_id=book.id) }}" enctype="multipart/form-data">
+                <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                <input type="hidden" name="revision" value="{{ book.revision }}">
+                <label for="cover-file" class="sr-only">Choose a cover image from disk</label>
+                <input id="cover-file" name="cover_file" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" required>
+                <button id="add-cover-button" type="submit" class="secondary">Add Cover</button>
+                <p class="hint">JPEG, PNG, or WebP · Up to 5 MB. Choosing a file saves it as this title’s cover.</p>
+                <p id="add-cover-message" class="hint" role="status" hidden></p>
+            </form>
             <section class="description-section" {% if book.description_status == 'pending' %}data-description-pending="{{ book.id }}"{% endif %}>
                 <h2>About this {{ item_label }}</h2>
                 {% if book.status == 'ambiguous' %}
@@ -89,10 +99,14 @@
             </section>
             {# Display type-specific metadata, including episode numbering and optional EIDR links. #}
             <dl>
+                {% if book.kind == 'movie' %}
+                    <dt>Alternate Title</dt>
+                    <dd>{{ book.alternate_title or 'Not provided' }}</dd>
+                {% endif %}
                 <dt>Metadata status</dt>
                 <dd>{{ {'pending':'Lookup queued','matched':'Exact search match saved','unmatched':'No exact match found','failed':'Lookup failed','ambiguous':'Choose the intended title'}[book.status] }}</dd>
                 <dt>{{ 'First published' if book.kind == 'book' else 'Released' }}</dt>
-                <dd>{{ book.match.get('first_publish_year', 'Unknown') }}</dd>
+                <dd>{{ (book.year if book.kind == 'movie' else '') or book.match.get('first_publish_year') or 'Unknown' }}</dd>
                 <dt>{{ 'Authors' if book.kind == 'book' else 'Director / creator' }}</dt>
                 <dd>{% include 'author_links.html' %}</dd>
                 <dt>{{ 'Subjects' if book.kind == 'book' else 'Genres' }}</dt>
@@ -143,6 +157,12 @@
                 <input type="hidden" name="csrf" value="{{ session.csrf }}">
                 <label for="title">Title</label>
                 <input id="title" name="title" value="{{ book.title }}" required maxlength="500">
+                {% if book.kind == 'movie' %}
+                    <label for="year">Year <span class="optional">optional</span></label>
+                    <input id="year" name="year" type="number" min="1000" max="9999" step="1" value="{{ book.year }}">
+                    <label for="alternate-title">Alternate Title <span class="optional">optional</span></label>
+                    <input id="alternate-title" name="alternate_title" value="{{ book.alternate_title }}" maxlength="500" placeholder="Original-language or translated title">
+                {% endif %}
                 <label for="author">{{ 'Author' if book.kind == 'book' else 'Director' if book.kind == 'movie' else 'Creator' }}</label>
                 <input id="author" name="author" value="{{ book.author }}" maxlength="500">
                 {% if book.kind == 'book' %}
@@ -158,6 +178,7 @@
                 <textarea id="notes" name="notes" rows="5" maxlength="10000">{{ book.notes }}</textarea>
                 <button type="submit" class="primary">Save changes</button>
             </form>
+            {% include 'tag_editor.html' %}
             {# Removing a TV parent also removes the descendants described in this confirmation area. #}
             <details class="remove">
                 <summary>Remove this {{ item_label }}</summary>

@@ -25,6 +25,7 @@
                                 <span class="muted"> · {{ book.match.first_publish_year }}</span>
                             {% endif %}
                         </div>
+                        {% include 'tag_chips.html' %}
                         <span class="badge">{{ book.reading_status }}</span>
                     </li>
                 {% endfor %}

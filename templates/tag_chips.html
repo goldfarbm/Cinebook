@@ -1,0 +1,5 @@
+{% if book.tags %}
+    <div class="tag-chips" aria-label="Tags for {{ book.title }}">
+        {% for tag in book.tags %}<span class="tag-chip">{{ tag.name }}</span>{% endfor %}
+    </div>
+{% endif %}

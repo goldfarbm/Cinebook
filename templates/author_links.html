@@ -1,2 +1,2 @@
-{# Book authors open author pages; other creators link to their containing collection. Keep comma spacing inline. #}
-{% for author in book.authors %}<a class="author-link" href="{{ url_for('author_titles', name=author) if book.kind == 'book' else collection_url(book, author) }}">{{ author }}</a>{% if not loop.last %}, {% endif %}{% else %}{{ 'Author unknown' if book.kind == 'book' else 'Creator not specified' }}{% endfor %}
+{# Book authors open author pages; movie directors display as plain text; other creators link to their containing collection. Keep comma spacing inline. #}
+{% for author in book.authors %}{% if book.kind == 'movie' %}{{ author }}{% else %}<a class="author-link" href="{{ url_for('author_titles', name=author) if book.kind == 'book' else collection_url(book, author) }}">{{ author }}</a>{% endif %}{% if not loop.last %}, {% endif %}{% else %}{{ 'Author unknown' if book.kind == 'book' else 'Creator not specified' }}{% endfor %}

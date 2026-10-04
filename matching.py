@@ -4,6 +4,10 @@ import hashlib
 import json
 
 
+def matches_movie_year(item, year):
+    return not item.get('year') or str(year or '')[:4] == str(item['year'])
+
+
 def candidate_key(metadata):
     # Prefer the provider’s stable record key; hash sorted match data when no key is available.
     match = metadata.get('match', {})

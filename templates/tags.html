@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block title %}Tags · Cinebook{% endblock %}
+{% block content %}
+    <nav class="back-links"><a href="{{ url_for('index') }}">← Back to your library</a></nav>
+    <section class="detail-heading">
+        <p class="eyebrow">MAKE IT YOUR OWN</p>
+        <h1>Tags</h1>
+        <p class="intro">Organize your books, movies, and TV titles.</p>
+    </section>
+    <div class="workspace">
+        <section class="panel tag-catalog">
+            <h2>Your Tags <span class="count">{{ available_tags | length }}</span></h2>
+            <p class="hint">Genre and theme tags start from saved metadata. Assign or remove tags on each title’s page.</p>
+            {% if available_tags %}
+                <ul class="tag-list">
+                    {% for tag in available_tags %}
+                        <li>
+                            <div><strong>{{ tag.name }}</strong><span class="muted">{{ tag.title_count }} {{ 'title' if tag.title_count == 1 else 'titles' }}</span></div>
+                            <details class="tag-delete">
+                                <summary>Delete</summary>
+                                <p class="hint">Delete “{{ tag.name }}” from all {{ tag.title_count }} titles? Your titles will stay in the library.</p>
+                                <form method="post" action="{{ url_for('delete_tag', tag_id=tag.id) }}">
+                                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                                    <button class="danger" type="submit">Delete tag</button>
+                                </form>
+                            </details>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}<p>No tags yet. Create one or add tags from your saved metadata.</p>{% endif %}
+        </section>
+        <aside>
+            <section class="panel">
+                <h2>Automatic tagging</h2>
+                <p class="hint">Apply genre and theme tags from saved metadata across Books, Movies, and TV Shows. Run again after adding titles. Your manual selections stay intact. Previously deleted tags may be recreated.</p>
+                <form method="post" action="{{ url_for('suggest_tags') }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <button class="primary" type="submit">Run automatic tagging</button>
+                </form>
+            </section>
+            <section class="panel">
+                <h2>Create a tag</h2>
+                <form method="post" action="{{ url_for('create_tag') }}">
+                    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+                    <label for="tag-name">Name</label>
+                    <input id="tag-name" name="name" required maxlength="60" placeholder="e.g. Favorites">
+                    <button class="primary" type="submit">Create tag</button>
+                </form>
+            </section>
+        </aside>
+    </div>
+{% endblock %}

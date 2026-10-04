@@ -459,7 +459,7 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(self.book()['description_status'], 'available')
         self.assertIn(b'A story of desert worlds.', self.client.get('/').data)
         detail = self.client.get('/books/1').data
-        self.assertIn(b'About this book', detail)
+        self.assertRegex(detail, rb'About this [bB]ook')
         self.assertIn(b'&lt;script&gt;unsafe&lt;/script&gt;', detail)
         self.assertNotIn(b'<script>unsafe</script>', detail)
         exported = self.client.get('/export').json['titles'][0]

@@ -98,3 +98,28 @@ select{font:inherit;display:block;width:100%;padding:10px 11px;border:1px solid 
 .grid[data-view=list] .status-controls{flex-wrap:wrap}.grid[data-view=list] .status-controls select{flex:1 0 132px;width:auto;min-width:132px}.grid[data-view=list] .status-save{flex-shrink:0}
 
 .search-empty-title{font:24px Georgia,serif;margin-top:15px}.search-empty-hint,.empty p.search-empty-hint{font-size:18px;color:var(--muted);margin:8px 0 0}
+
+#cover-file[hidden]{display:none}
+
+/* Two equal rows stay beneath search in both grid and list views. */
+.alphabet-filter{display:grid;gap:6px;margin:0 0 24px}
+.alphabet-row{display:grid;grid-template-columns:repeat(14,minmax(0,1fr));gap:5px}
+.alphabet-row button{min-width:0;padding:8px 0;border:1px solid var(--line);border-radius:4px;background:var(--subtle);color:var(--ink);font-size:12px;font-weight:600;line-height:1.4}
+.alphabet-row button[aria-pressed=true]{background:var(--green);border-color:var(--green);color:var(--button-ink)}
+@media(max-width:650px){.alphabet-row{gap:3px}.alphabet-row button{padding:9px 0;font-size:10px}}
+
+/* Tags share the active appearance palette and wrap in both collection views. */
+.tag-chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.tag-chip{display:inline-block;border:1px solid var(--line);background:var(--subtle);color:var(--green);border-radius:20px;padding:3px 9px;font-size:11px;line-height:1.5;overflow-wrap:anywhere;max-width:100%}
+.title-tags{border-top:1px solid var(--line);padding-top:18px;margin-top:24px}
+.tag-options{display:flex;flex-wrap:wrap;gap:8px 16px;border:0;padding:0;margin:16px 0;max-height:240px;overflow:auto}
+.panel .tag-options label{display:flex;align-items:center;gap:7px;margin:0;font-weight:400;font-size:12px;overflow-wrap:anywhere}
+.tag-options input[type=checkbox]{width:16px;height:16px;margin:0;padding:0;accent-color:var(--green);flex-shrink:0}
+.tag-list{list-style:none;padding:0;margin:20px 0 0}
+.tag-list>li{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding:14px 0}
+.tag-list>li>div{display:flex;flex-direction:column;gap:4px;min-width:0;overflow-wrap:anywhere}
+.tag-list .muted{font-size:12px}
+.tag-delete{max-width:250px;font-size:12px}
+.tag-delete summary{cursor:pointer;color:var(--muted)}
+.tag-delete .danger{width:auto}
+@media(max-width:650px){.search{flex-wrap:wrap}.topbar{flex-wrap:wrap}.tag-list>li{gap:10px}.tag-delete{max-width:180px}}
