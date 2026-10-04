@@ -31,13 +31,14 @@ def plain_text(value):
 def lookup_media(item, normalize, now):
     # Adapt movie and TV results to the same match structure used by book metadata.
     choice = item.get('match_choice', '')
+    if item['kind'] == 'movie' and (not choice or choice.startswith('omdb:')):
+        primary = lookup_omdb(item, normalize, now, poster_url)
+        if primary:
+            return primary
     primary = lookup_balloon(item, normalize, now) if not choice or choice.startswith('balloon-') else None
     if primary:
         return primary
     if item['kind'] == 'movie':
-        fallback = lookup_omdb(item, normalize, now, poster_url) if not choice or choice.startswith('omdb:') else None
-        if fallback:
-            return fallback
         response = requests.get('https://itunes.apple.com/search',
                                 params={'term': item['title'], 'entity': 'movie', 'media': 'movie', 'limit': 50, 'country': 'CA'},
                                 timeout=(4, 8))

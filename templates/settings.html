@@ -12,7 +12,7 @@
     <section class="panel settings-panel" id="omdb-settings">
         <h2>OMDb movie data</h2>
         <p role="status">Status: <strong>{{ omdb.status }}</strong></p>
-        <p class="hint">The first fallback for movie metadata. <a href="https://www.omdbapi.com/apikey.aspx" rel="noreferrer">Get an OMDb API key</a>.</p>
+        <p class="hint">The primary source for movie metadata. If unavailable or unconfigured, lookup continues with Balloonerismm, iTunes, and Wikipedia. <a href="https://www.omdbapi.com/apikey.aspx" rel="noreferrer">Get an OMDb API key</a>.</p>
         {% if omdb.override %}
             <p class="hint">Using OMDB_API_KEY from the server environment. Remove that variable to manage the active key here.</p>
         {% else %}

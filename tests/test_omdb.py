@@ -1,4 +1,4 @@
-"""OMDb fallback ordering, exact matching, saved choices, and offline metadata."""
+"""OMDb primary ordering, exact matching, saved choices, and offline metadata."""
 import json
 import os
 import unittest
@@ -37,29 +37,33 @@ class OmdbTests(unittest.TestCase):
         return {'Response': 'True', 'totalResults': str(len(movies)), 'Search': [
             {field: movie[field] for field in ('Type', 'imdbID', 'Title')} for movie in movies]}
 
+    @patch('media.lookup_balloon')
     @patch('omdb.requests.get')
-    def test_primary_then_omdb_short_circuits_itunes_and_wikipedia(self, get):
+    def test_omdb_short_circuits_all_fallbacks(self, get, balloon):
         movie = self.movie()
-        get.side_effect = [requests.ConnectionError(), self.response(self.search(movie)), self.response(movie)]
+        get.side_effect = [self.response(self.search(movie)), self.response(movie)]
         result = lookup(self.item())
         self.assertEqual(result['provider'], 'OMDb')
         self.assertEqual(result['match']['key'], 'omdb:tt2543164')
         self.assertEqual(result['match']['author_name'], ['Denis Villeneuve'])
         self.assertEqual(result['match']['subject'], ['Drama', 'Sci-Fi'])
         self.assertEqual(result['match']['runtime'], 116)
-        self.assertEqual(get.call_count, 3)
-        self.assertIn('/search/movie', get.call_args_list[0].args[0])
-        self.assertEqual(get.call_args_list[1].args[0], BASE_URL)
+        self.assertEqual(get.call_count, 2)
+        balloon.assert_not_called()
+        self.assertEqual(get.call_args_list[0].args[0], BASE_URL)
         self.assertEqual(get.call_args.kwargs['params']['plot'], 'full')
         self.assertEqual(get.call_args.kwargs['timeout'], (4, 8))
         self.assertNotIn('test-private-key', json.dumps(result))
 
     @patch('media.lookup_balloon')
     @patch('omdb.requests.get')
-    def test_primary_success_does_not_query_omdb(self, get, primary):
+    def test_omdb_failure_falls_back_to_balloon(self, get, primary):
         primary.return_value = {'provider': 'Balloonerismm (IMDb)', 'match': {'key': 'balloon-movie:tt1'}}
+        get.side_effect = requests.ConnectionError()
         self.assertEqual(lookup(self.item()), primary.return_value)
-        get.assert_not_called()
+        get.assert_called_once()
+        self.assertEqual(get.call_args.args[0], BASE_URL)
+        primary.assert_called_once()
 
     @patch('media.lookup_balloon', return_value=None)
     @patch('omdb.requests.get')
@@ -114,7 +118,7 @@ class OmdbTests(unittest.TestCase):
         self.assertEqual(selected['match']['first_publish_year'], '1996')
         get.assert_called_once()
         self.assertEqual(get.call_args.kwargs['params']['i'], 'tt123')
-        # A saved iTunes selection bypasses the new fallback too.
+        # A saved iTunes selection bypasses the primary provider too.
         get.reset_mock()
         get.side_effect = [self.response({'results': [
             {'kind': 'feature-movie', 'trackId': 1, 'trackName': 'Arrival'}]})]
