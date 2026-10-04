@@ -7,7 +7,9 @@ A local personal collection of books, movies, and TV shows. Flask serves the int
 
 ## Run
 
-Use a current Python with OpenSSL (Python 3.10 or later recommended). To set up a new environment:
+Use a current Python with OpenSSL (Python 3.10 or later recommended). 
+
+To set up a new environment:
 
 ```sh
 python3 -m venv .venv
